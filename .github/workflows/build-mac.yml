@@ -58,7 +58,7 @@ jobs:
         run: npm run build:mac
 
       - name: Upload .dmg as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-dmg
           path: dashboard/dist/*.dmg
