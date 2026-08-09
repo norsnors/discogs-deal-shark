@@ -43,7 +43,7 @@ jobs:
       # - run: npm ci --omit=dev
 
       - name: Restore state (history / cursor / alert memory)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: state
           key: ddw-state-${{ github.run_id }}
