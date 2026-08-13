@@ -1,6 +1,5 @@
 'use strict';
 
-const ALLOWED_LIMITS = new Set([25, 50, 100]);
 const ALLOWED_CURRENCIES = new Set(['EUR', 'USD', 'GBP']);
 const CONDITION_RANK = {
   'Mint (M)': 0,
@@ -31,13 +30,12 @@ function normalizeCityDigOptions(raw = {}, cities = []) {
   const cityId = String(raw.cityId || '').trim();
   const city = cities.find((candidate) => candidate.id === cityId);
   if (!city) throw new Error('Choose an available City Dig city first.');
-  const availableSellers = new Set(city.stores.map((store) => store.sellerUsername).filter(Boolean));
-  const sellerUsernames = cleanList(raw.sellerUsernames, 25).filter((seller) => availableSellers.has(seller));
+  // A city load always means every verified seller in that city. Store checkboxes are status
+  // indicators, not a way to accidentally omit a shop from the combined inventory.
+  const sellerUsernames = city.stores.map((store) => store.sellerUsername).filter(Boolean);
   if (!sellerUsernames.length) throw new Error('Choose at least one store with a verified Discogs inventory.');
   const taxonomies = cleanList(raw.taxonomies, 20);
-  if (!taxonomies.length) throw new Error('Choose at least one genre or style.');
-  const requestedLimit = Number(raw.limitPerSeller);
-  const limitPerSeller = ALLOWED_LIMITS.has(requestedLimit) ? requestedLimit : 50;
+  const limitPerSeller = 100;
   const requestedCurrency = String(raw.currency || 'EUR').toUpperCase();
   const currency = ALLOWED_CURRENCIES.has(requestedCurrency) ? requestedCurrency : 'EUR';
   return { cityId, sellerUsernames, taxonomies, limitPerSeller, currency };
@@ -110,10 +108,10 @@ module.exports = {
 if (require.main === module && process.argv.includes('--selftest')) {
   const assert = require('assert');
   const cities = [{ id: 'antwerp', stores: [{ sellerUsername: 'wgwstore' }, { sellerUsername: null }] }];
-  assert.deepStrictEqual(normalizeCityDigOptions({ cityId: 'antwerp', sellerUsernames: ['wgwstore', 'fake'], taxonomies: [' Italo-Disco ', 'italo-disco'], limitPerSeller: 25 }, cities), {
-    cityId: 'antwerp', sellerUsernames: ['wgwstore'], taxonomies: ['Italo-Disco'], limitPerSeller: 25, currency: 'EUR',
+  assert.deepStrictEqual(normalizeCityDigOptions({ cityId: 'antwerp', sellerUsernames: [], taxonomies: [' Italo-Disco ', 'italo-disco'], limitPerSeller: 25 }, cities), {
+    cityId: 'antwerp', sellerUsernames: ['wgwstore'], taxonomies: ['Italo-Disco'], limitPerSeller: 100, currency: 'EUR',
   });
-  assert.throws(() => normalizeCityDigOptions({ cityId: 'antwerp', sellerUsernames: [], taxonomies: ['Disco'] }, cities), /store/);
+  assert.deepStrictEqual(normalizeCityDigOptions({ cityId: 'antwerp', taxonomies: [] }, cities).taxonomies, []);
   assert.ok(looksLikeVinyl('12\", Single'));
   assert.ok(!looksLikeVinyl('CD, Album'));
   const listing = normalizeInventoryListing({ id: 4, price: { value: 12, currency: 'EUR' }, release: { id: 8, artist: 'Koto', title: 'Visitors', format: '12\"' } }, 'wgwstore');

@@ -43,7 +43,7 @@ const DEMO_GEMS = {
 const DEMO_SCOUT = {
   ts: Date.now(),
   query: { field: 'style', query: 'Italo-Disco', minValue: 80, limit: 100, currency: 'EUR' },
-  inspected: 100,
+  inspected: 200,
   candidates: 97,
   excludedWantlist: 3,
   aborted: false,
@@ -56,7 +56,7 @@ const DEMO_SCOUT = {
 const DEMO_CITY_DIG = {
   ts: Date.now(),
   city: { id: 'antwerp', name: 'Antwerp', country: 'Belgium' },
-  query: { cityId: 'antwerp', sellerUsernames: ['wgwstore', 'Tune-Up-Records'], taxonomies: ['Italo-Disco', 'Synth-pop', 'Electro'], limitPerSeller: 50, currency: 'EUR' },
+  query: { cityId: 'antwerp', sellerUsernames: ['wgwstore', 'Tune-Up-Records'], taxonomies: ['Italo-Disco', 'Synth-pop', 'Electro'], limitPerSeller: 100, currency: 'EUR' },
   inspected: 100,
   releasesChecked: 96,
   cacheHits: 82,
@@ -243,7 +243,7 @@ function updateViewCopy() {
   $('view-eyebrow').textContent = city ? 'DIG THE CITY' : (scout ? 'BEYOND YOUR WANTLIST' : (gems ? 'RARITY WATCH' : 'YOUR WANTLIST'));
   $('view-title').textContent = city ? 'Antwerp record stores, one inventory at a time' : (scout ? 'Scout valuable records you may be missing' : (gems ? 'Rare records that just surfaced' : 'Deals worth opening'));
   $('view-intro').textContent = city
-    ? 'See every mapped shop for free, then explicitly load a small, genre-focused slice from verified Discogs sellers.'
+    ? 'See every mapped shop for free, then load the first 100 vinyl listings from every verified Discogs seller in the city.'
     : scout
     ? 'Search Discogs by style or genre, filter on estimated VG+ value, and add promising pressings straight to your wantlist.'
     : (gems
@@ -848,8 +848,6 @@ const cityNumber = (value) => Number.isFinite(Number(value)) ? new Intl.NumberFo
 function currentCity() { return cityCities.find((city) => city.id === 'antwerp') || cityCities[0] || null; }
 
 function selectedCitySellers() {
-  const inputs = [...document.querySelectorAll('.city-store input[data-seller]')].filter((input) => input.dataset.seller);
-  if (inputs.length) return inputs.filter((input) => input.checked).map((input) => input.dataset.seller);
   return (currentCity()?.stores || []).filter((store) => store.sellerUsername).map((store) => store.sellerUsername);
 }
 
@@ -959,7 +957,7 @@ function renderCityDirectory(selected = null) {
     const count = online ? (cityCounts[store.sellerUsername] ?? store.inventoryCount) : null;
     const checked = online && keep.has(store.sellerUsername);
     return `<label class="city-store${online ? '' : ' offline'}" data-store="${esc(store.id)}" title="${online ? 'Verified Discogs seller' : 'Physical store mapped; Discogs seller not verified'}">
-      <input type="checkbox" data-seller="${esc(store.sellerUsername || '')}"${checked ? ' checked' : ''}${online ? '' : ' disabled'} />
+      <input type="checkbox" data-seller="${esc(store.sellerUsername || '')}"${checked ? ' checked' : ''} disabled />
       <span class="city-store-main"><strong>${index + 1}. ${esc(store.name)}</strong><small>${esc(store.address)}${online ? ` · @${esc(store.sellerUsername)}` : ''}</small></span>
       <span class="city-store-count"><b>${online ? cityNumber(count) : 'Map only'}</b><small>${online ? 'for sale' : 'seller unlinked'}</small></span>
     </label>`;
@@ -1011,7 +1009,7 @@ function currentCityOptions() {
     cityId: currentCity()?.id || 'antwerp',
     sellerUsernames: selectedCitySellers(),
     taxonomies: [...document.querySelectorAll('#city-taxonomies input:checked')].map((input) => input.value),
-    limitPerSeller: Number($('city-limit').value) || 50,
+    limitPerSeller: 100,
     currency: 'EUR',
   };
 }
@@ -1034,6 +1032,7 @@ function cityCard(item) {
   const place = [item.year, item.country].filter(Boolean).join(' · ');
   const matches = (item.matchedTaxonomies || []).map((value) => `<span class="tag city-match">${esc(value)}</span>`).join('');
   const taxonomy = [...(item.styles || []), ...(item.genres || [])].filter((value) => !(item.matchedTaxonomies || []).includes(value)).slice(0, 2).map((value) => `<span class="tag">${esc(value)}</span>`).join('');
+  const taxonomyState = item.taxonomyPending ? '<span class="tag">genre pending</span>' : '';
   const label = item.labels && item.labels[0] ? item.labels[0] : null;
   return `<article class="card is-city">
     ${thumb}
@@ -1042,7 +1041,7 @@ function cityCard(item) {
       <p class="artist">${esc(item.artist || '')}${place ? ` · ${esc(place)}` : ''}</p>
       <div class="price-row"><span class="price">${money(item.price, item.currency)}</span><span class="scout-value-label">asking price</span></div>
       <div class="ref">${esc(item.condition || 'condition unknown')} · sleeve ${esc(item.sleeveCondition || 'unknown')}</div>
-      <div class="meta"><span class="tag city-store-tag">${esc(item.storeName)}</span>${matches}${taxonomy}${label ? `<span class="tag">${esc(label.name)}${label.catno ? ` · ${esc(label.catno)}` : ''}</span>` : ''}</div>
+      <div class="meta"><span class="tag city-store-tag">${esc(item.storeName)}</span>${matches}${taxonomy}${taxonomyState}${label ? `<span class="tag">${esc(label.name)}${label.catno ? ` · ${esc(label.catno)}` : ''}</span>` : ''}</div>
       <p class="city-listing-meta">${esc(item.format || 'Vinyl')}${item.posted ? ` · listed ${esc(fmtDateShort(item.posted))}` : ''} · ${esc(item.storeAddress || '')}</p>
       <div class="scout-actions"><button class="buy city-buy" data-url="${esc(item.listingUrl)}">Open listing →</button><button class="want-add city-seller" data-url="${esc(item.sellerUrl)}">Full store ↗</button></div>
     </div>
@@ -1057,13 +1056,14 @@ function renderCityDig() {
   let results = cityDigData.results.filter((item) => !search || `${item.artist || ''} ${item.title || ''} ${item.storeName || ''} ${(item.styles || []).join(' ')}`.toLowerCase().includes(search));
   results = sortCityResults(results, $('city-sort').value, query.taxonomies || []);
   $('pill-deals').textContent = `${results.length} city finds`;
-  $('resultCount').textContent = cityDigData.ts ? `${results.length} matches · ${cityDigData.inspected} listings read · ${cityDigData.cacheHits} cached` : '';
+  const storeCount = new Set(results.map((item) => item.sellerUsername).filter(Boolean)).size;
+  $('resultCount').textContent = cityDigData.ts ? `${results.length} items · ${storeCount} stores · ${cityDigData.cacheHits} genre-ready` : '';
   if (!results.length) {
     wrap.innerHTML = '';
     empty.classList.remove('hidden');
     empty.textContent = cityDigData.ts
-      ? `No selected genres were found in the ${cityDigData.inspected} vinyl listings loaded. Try more genres, stores or a deeper load.`
-      : 'Store totals are ready above. Choose one or more verified sellers, then load their newest inventory when you want to dig.';
+      ? `No vinyl listings were returned by the linked stores.`
+      : 'Store totals are ready above. Load the first 100 vinyl listings from every verified Discogs store when you want to dig.';
     return;
   }
   empty.classList.add('hidden');
@@ -1074,10 +1074,11 @@ function renderCityDig() {
 function setCityDigUI(on) {
   cityDigging = on;
   $('city-run').disabled = on;
-  $('city-limit').disabled = on;
+  $('city-limit').disabled = true;
   $('city-progress').classList.toggle('hidden', !on);
-  $('city-run').textContent = on ? 'Loading inventories…' : 'Load selected inventories';
-  document.querySelectorAll('.city-store input, #city-taxonomies input').forEach((input) => { input.disabled = on || (!input.dataset.seller && input.closest('.city-store')?.classList.contains('offline')); });
+  $('city-run').textContent = on ? 'Loading every store…' : 'Load first 100 from every store';
+  document.querySelectorAll('.city-store input').forEach((input) => { input.disabled = true; });
+  document.querySelectorAll('#city-taxonomies input').forEach((input) => { input.disabled = on; });
   $('btn-fullscan').disabled = on || scanning || scouting;
 }
 
@@ -1085,7 +1086,7 @@ async function startCityDig(event) {
   if (event) event.preventDefault();
   if (cityDigging || scanning || scouting) return;
   const opts = currentCityOptions();
-  if (!opts.sellerUsernames.length || !opts.taxonomies.length) return;
+  if (!opts.sellerUsernames.length) return;
   try { localStorage.setItem(CITY_PREFS_KEY, JSON.stringify(opts)); } catch { /* best effort */ }
   if (!hasApi) {
     cityDigData = normalizeCityDigData(DEMO_CITY_DIG);
@@ -1108,13 +1109,11 @@ async function startCityDig(event) {
 function onCityDigProgress(message) {
   if (!message) return;
   let pctDone = 3;
-  if (message.phase === 'inventory') pctDone = 3 + Math.round((((message.storeIndex || 0) + (message.checked / Math.max(1, message.total))) / Math.max(1, message.stores)) * 17);
-  if (message.phase === 'taxonomy') pctDone = 20 + Math.round((message.checked / Math.max(1, message.total)) * 80);
+  if (message.phase === 'inventory') pctDone = 3 + Math.round((((message.storeIndex || 0) + (message.checked / Math.max(1, message.total))) / Math.max(1, message.stores)) * 97);
   if (message.phase === 'done') pctDone = 100;
   $('city-progress-fill').style.width = Math.min(100, pctDone) + '%';
   if (message.phase === 'inventory') $('city-status').textContent = `Reading ${message.store} · ${message.checked}/${message.total} newest listings`;
-  else if (message.phase === 'taxonomy') $('city-status').textContent = `Matching genres ${message.checked}/${message.total} · ${message.cacheHits || 0} from cache`;
-  else if (message.phase === 'done') $('city-status').textContent = `Done · ${message.found} matching listings${message.aborted ? ' (stopped early)' : ''}`;
+  else if (message.phase === 'done') $('city-status').textContent = `Done · ${message.found} vinyl listings loaded${message.aborted ? ' (stopped early)' : ''}`;
 }
 
 function setTab(tab) {
@@ -1999,7 +1998,7 @@ window.addEventListener('DOMContentLoaded', () => {
   applyFilterState(readFilterState());
   applyScoutPrefs(loadScoutPrefs());
   let cityPrefs = {}; try { cityPrefs = JSON.parse(localStorage.getItem(CITY_PREFS_KEY) || '{}'); } catch { cityPrefs = {}; }
-  if ([25, 50, 100].includes(Number(cityPrefs.limitPerSeller))) $('city-limit').value = String(cityPrefs.limitPerSeller);
+  $('city-limit').value = '100';
   if (Array.isArray(cityPrefs.taxonomies) && cityPrefs.taxonomies.length) {
     const selectedTaxonomies = new Set(cityPrefs.taxonomies);
     document.querySelectorAll('#city-taxonomies input').forEach((input) => { input.checked = selectedTaxonomies.has(input.value); });

@@ -29,15 +29,16 @@ daily review queue. Buying always stays on Discogs and always remains manual.
 | **Deals** | VG+ or better copies priced below their real market reference, including shipping, price drops and relists. |
 | **Rare gems** | Wantlist releases that had zero copies for sale and have just returned to the market. |
 | **Scout** | Valuable releases outside your wantlist, searched by Discogs style or genre and filtered by an estimated VG+ value. |
-| **City Dig** | Record stores on a local city map, with seller totals first and a genre-focused inventory slice only after an explicit load action. |
+| **City Dig** | Record stores on an interactive city map, with seller totals first and the newest 100 vinyl listings from every verified city seller after one explicit load action. |
 
 Scout excludes releases already on your wantlist. A result is only added when you explicitly press
 **Add to wantlist**.
 
 City Dig starts with an Antwerp pilot. Its bundled store directory and map use OpenStreetMap data,
 so there is no paid maps service or API key. Opening the tab fetches only lightweight inventory
-totals for verified Discogs sellers. You choose the stores, genres/styles and a limit of 25, 50 or
-100 newest listings before loading release details.
+totals. One explicit action then loads the newest 100 vinyl listings from every store whose Discogs
+seller account has been verified. Existing cached genre/style metadata is reused without delaying
+the complete inventory feed.
 
 ## Download
 
@@ -76,7 +77,7 @@ requests. Results and sold medians are cached locally so later scans can reuse r
 - Marketplace requests and secrets stay in Electron's isolated main process.
 - The app never adds a record to a cart and never completes a purchase.
 - Scout changes your wantlist only after an explicit **Add to wantlist** click.
-- City Dig never loads store listings until you explicitly press **Load selected inventories**.
+- City Dig never loads store listings until you explicitly press **Load first 100 from every store**.
 - The optional cloud watcher runs in your own accounts and can be disabled independently.
 
 ## Development

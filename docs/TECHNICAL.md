@@ -259,11 +259,13 @@ the OSM tile service with the app name/version and shows attribution on both map
 confidently verified Discogs username remain visible but cannot be scanned.
 
 Opening the tab calls only the Discogs user-profile endpoint for each verified seller and displays
-`num_for_sale`. Listing data loads only after **Load selected inventories**. The renderer sends the
-chosen sellers, taxonomies and a hard limit of 25, 50 or 100 newest listings per store to the main
-process. That process serializes inventory and release requests with the existing scan guard,
-filters vinyl formats, caches release genres/styles for 180 days and persists the last City Dig for
-offline review. Buying and cart actions remain outside the app.
+`num_for_sale`. Listing data loads only after **Load first 100 from every store**. The main process
+then requests one 100-item newest-first inventory page for every verified seller, filters vinyl
+formats and persists the combined feed for offline review. Inventory rows already supply artist,
+title, format, condition and price, so the initial city load never performs one extra release call
+per listing. Genre/style metadata already present in the shared 180-day cache is added opportunistically;
+uncached listings remain visible and are marked for later enrichment. Buying and cart actions remain
+outside the app.
 
 ## Desktop releases
 

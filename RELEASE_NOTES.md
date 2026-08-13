@@ -3,8 +3,8 @@
 - **City Dig Antwerp pilot:** interactive, zoomable world and street maps plus a nine-store
   directory, powered by locally bundled Leaflet and OpenStreetMap tiles at no API cost.
 - **Passive first step:** opening City Dig checks only inventory totals for verified sellers.
-- **Explicit inventory load:** users select sellers, priority genres/styles and a 25/50/100-item
-  depth before any listing or release details are requested from Discogs.
+- **Explicit city-wide inventory load:** one action loads the newest 100 vinyl listings from every
+  verified Discogs seller in the city. Inventory cards are never discarded for missing taxonomy.
 - **Discogs-friendly caching:** release taxonomy is reused for 180 days and all Discogs jobs share
   the existing single-scan guard.
 

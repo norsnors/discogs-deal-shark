@@ -1427,47 +1427,36 @@ async function runCityDig(win, rawOpts = {}) {
       }
     }
 
+    // The inventory row already contains enough data for a useful card. Reuse any taxonomy the
+    // app knows, but do not turn each 100-item store page into another 100 API requests.
     const metadata = new Map();
     const uniqueReleaseIds = [...new Set(listings.map((listing) => listing.releaseId))];
     let cacheHits = 0;
-    let checked = 0;
-    const results = [];
     for (const releaseId of uniqueReleaseIds) {
-      if (cityDigAbort) break;
-      let meta = store.getReleaseMeta(releaseId);
-      if (meta && meta.ts && Date.now() - meta.ts < RELEASE_META_TTL_MS) cacheHits += 1;
-      else {
-        try {
-          const release = await client.getRelease(releaseId);
-          meta = release ? { ts: Date.now(), ...release } : null;
-          if (meta) store.setReleaseMeta(releaseId, meta);
-        } catch (error) {
-          if (error && error.status === 401) throw error;
-          meta = null;
-        }
+      const meta = store.getReleaseMeta(releaseId);
+      if (meta && meta.ts && Date.now() - meta.ts < RELEASE_META_TTL_MS) {
+        metadata.set(releaseId, meta);
+        cacheHits += 1;
       }
-      if (meta) metadata.set(releaseId, meta);
-      checked += 1;
-      send({ phase: 'taxonomy', checked, total: uniqueReleaseIds.length, found: results.length, cacheHits });
     }
 
+    const results = [];
     for (const listing of listings) {
-      const meta = metadata.get(listing.releaseId);
-      if (!meta) continue;
-      const matchedTaxonomies = matchTaxonomies(meta, opts.taxonomies);
-      if (!matchedTaxonomies.length) continue;
+      const meta = metadata.get(listing.releaseId) || null;
+      const matchedTaxonomies = meta ? matchTaxonomies(meta, opts.taxonomies) : [];
       const selectedStore = storesBySeller.get(listing.sellerUsername) || {};
       results.push({
         ...listing,
-        artist: meta.artist || listing.artist,
-        title: meta.title || listing.title,
-        year: meta.year || listing.year,
-        country: meta.country || null,
-        thumb: meta.thumb || listing.thumb,
-        genres: meta.genres || [],
-        styles: meta.styles || [],
-        labels: meta.labels || [],
+        artist: (meta && meta.artist) || listing.artist,
+        title: (meta && meta.title) || listing.title,
+        year: (meta && meta.year) || listing.year,
+        country: (meta && meta.country) || null,
+        thumb: (meta && meta.thumb) || listing.thumb,
+        genres: (meta && meta.genres) || [],
+        styles: (meta && meta.styles) || [],
+        labels: (meta && meta.labels) || [],
         matchedTaxonomies,
+        taxonomyPending: !meta,
         storeId: selectedStore.id || null,
         storeName: selectedStore.name || listing.sellerUsername,
         storeAddress: selectedStore.address || '',
@@ -1482,14 +1471,14 @@ async function runCityDig(win, rawOpts = {}) {
       city: { id: city.id, name: city.name, country: city.country },
       query: opts,
       inspected: listings.length,
-      releasesChecked: checked,
+      releasesChecked: metadata.size,
       cacheHits,
       skippedNonVinyl,
       aborted: cityDigAbort,
       results,
     };
     try { fs.writeFileSync(LAST_CITY_DIG_FILE(), JSON.stringify(output, null, 2)); } catch { /* persistence is best effort */ }
-    send({ phase: 'done', checked, total: uniqueReleaseIds.length, found: results.length, aborted: cityDigAbort, cacheHits });
+    send({ phase: 'done', checked: metadata.size, total: uniqueReleaseIds.length, found: results.length, aborted: cityDigAbort, cacheHits });
     return output;
   } finally {
     cityDigRunning = false;
