@@ -25,7 +25,7 @@ const preserved = [
   'freshOnly', 'showHidden', 'showNearMiss', 'settings-modal', 'cloud-modal', 'telegram-modal',
   'wizard-modal', 'scout-panel', 'scout-form', 'scout-field', 'scout-query', 'scout-min-value',
   'scout-limit', 'scout-run', 'scout-cancel', 'deals', 'empty',
-  'city-panel', 'city-local-map', 'city-stores', 'city-taxonomies', 'city-limit', 'city-sort',
+  'city-panel', 'city-world-map', 'city-local-map', 'city-stores', 'city-taxonomies', 'city-limit', 'city-sort',
   'city-run', 'city-cancel', 'city-refresh-counts',
 ];
 for (const id of preserved) assert.strictEqual(idCounts.get(id), 1, `preserved feature #${id} missing`);
@@ -33,5 +33,6 @@ for (const id of preserved) assert.strictEqual(idCounts.get(id), 1, `preserved f
 assert.ok(/id="filter-panel"[^>]*class="[^"]*hidden/.test(html), 'advanced filters start collapsed');
 assert.ok(/id="tab-deals"/.test(html) && /id="tab-gems"/.test(html) && /id="tab-scout"/.test(html) && /id="tab-city"/.test(html), 'Deals, Rare gems, Scout and City Dig remain primary tabs');
 assert.ok(/Content-Security-Policy/.test(html), 'renderer CSP remains present');
+assert.ok(/node_modules\/leaflet\/dist\/leaflet\.js/.test(html), 'interactive map engine is bundled locally');
 
 console.log(`ui-contract selftest: ${rendererRefs.size} renderer bindings and ${preserved.length} preserved features passed`);

@@ -252,10 +252,11 @@ buys a record.
 
 ### City Dig (physical stores and Discogs inventory)
 
-City Dig ships with a small, versioned city/store dataset. The Antwerp pilot uses OpenStreetMap-
-derived coordinates and a local SVG map, so it needs no paid map SDK, tile service or geocoding
-request at runtime. Stores without a confidently verified Discogs username remain visible but
-cannot be scanned.
+City Dig ships with a small, versioned city/store dataset. The Antwerp pilot uses locally bundled
+Leaflet 1.9.4 with OpenStreetMap raster tiles for a real zoomable world map and Antwerp street map.
+It needs no paid map SDK, API key or runtime geocoding. The Electron renderer identifies itself to
+the OSM tile service with the app name/version and shows attribution on both maps. Stores without a
+confidently verified Discogs username remain visible but cannot be scanned.
 
 Opening the tab calls only the Discogs user-profile endpoint for each verified seller and displays
 `num_for_sale`. Listing data loads only after **Load selected inventories**. The renderer sends the

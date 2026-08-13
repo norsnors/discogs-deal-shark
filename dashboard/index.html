@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline';" />
   <title>Discogs Deal Shark</title>
+  <link rel="stylesheet" href="node_modules/leaflet/dist/leaflet.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -119,11 +120,9 @@
     <section id="city-panel" class="city-panel hidden" aria-label="City Dig record stores">
       <div class="city-layout">
         <div class="city-map-stack">
-          <div class="world-map" aria-label="City Dig world map — Antwerp is the first available city">
-            <svg viewBox="0 0 720 250" role="img" aria-label="World map">
-              <path d="M52 72l47-25 65 7 31 25-21 28-39 4-20 25-39-12-28-28zM169 142l29 18 19 42-18 38-20-20-13-42zM309 58l33-17 72 7 38 28-16 28-43-2-20 24-35-13-27-22zM363 122l48 8 24 34-18 54-31 22-25-42-18-37zM470 61l62-18 85 21 42 37-25 27-53-6-25 21-49-11-30-31zM599 171l47 4 26 23-19 27-47-6-18-25z" />
-            </svg>
-            <button id="city-antwerp-pin" class="world-pin active" type="button" aria-label="Open Antwerp"><span></span><b>Antwerp</b></button>
+          <div class="world-map-shell">
+            <div id="city-world-map" class="world-map" aria-label="Interactive City Dig world map — Antwerp is the first available city"></div>
+            <button id="city-antwerp-pin" class="map-focus-city" type="button" aria-label="Zoom maps to Antwerp">Focus Antwerp</button>
             <div class="world-map-caption"><span>WORLD MAP</span><b>1 city online</b></div>
           </div>
           <div id="city-local-map" class="city-local-map" aria-label="Antwerp record-store map"></div>
@@ -131,7 +130,7 @@
         <div class="city-directory">
           <div class="city-directory-head">
             <div><span class="city-kicker">BELGIUM · PILOT CITY</span><h3>Antwerp</h3></div>
-            <span class="free-badge">€0 · local map</span>
+            <span class="free-badge">€0 · OpenStreetMap</span>
           </div>
           <p class="city-directory-copy">Opening this tab only checks store inventory totals. Release data loads after you choose stores and press the button below.</p>
           <div id="city-stores" class="city-stores"></div>
@@ -374,6 +373,7 @@
     </div>
   </div>
 
+  <script src="node_modules/leaflet/dist/leaflet.js"></script>
   <script src="city-dig-data.js"></script>
   <script src="renderer.js"></script>
 </body>

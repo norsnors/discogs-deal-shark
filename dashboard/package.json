@@ -28,6 +28,7 @@
       "scout-policy.js",
       "city-dig-policy.js",
       "city-dig-data.js",
+      "node_modules/leaflet/dist/**/*",
       "preload.js",
       "renderer.js",
       "index.html",
@@ -114,6 +115,7 @@
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
+    "leaflet": "1.9.4",
     "libsodium-wrappers": "^0.8.4",
     "nodemailer": "^9.0.5"
   }

@@ -20,6 +20,8 @@ const requiredAppFiles = [
   '/scout-policy.js',
   '/city-dig-policy.js',
   '/city-dig-data.js',
+  '/node_modules/leaflet/dist/leaflet.css',
+  '/node_modules/leaflet/dist/leaflet.js',
   '/git-policy.js',
   '/runtime-policy.js',
   '/listing-history.js',

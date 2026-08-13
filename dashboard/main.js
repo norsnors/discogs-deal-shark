@@ -1975,6 +1975,9 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   mainWindow = win;
+  // OSM's public tile policy asks native apps to identify themselves with a stable User-Agent.
+  // This renderer never receives secrets; the identifier only names the open-source desktop app.
+  win.webContents.setUserAgent(`DiscogsDealShark/${app.getVersion()} (+https://github.com/norsnors/discogs-deal-shark)`);
   // Closing the MAIN window = quitting the app. Without this, a hidden helper window (the
   // Cloudflare scan window during an auto-scan, or a Discogs login window) keeps the process
   // alive headless after the user closes the app; that zombie then owns the single-instance

@@ -86,6 +86,9 @@ let cityCountsLoaded = false;
 let cityCities = Array.isArray(window.CITY_DIG_CITIES) ? window.CITY_DIG_CITIES : [];
 let cityCounts = {};
 let cityDigData = { ts: null, city: null, query: null, inspected: 0, releasesChecked: 0, cacheHits: 0, skippedNonVinyl: 0, aborted: false, results: [] };
+let cityWorldMap = null;
+let cityLocalMap = null;
+let cityStoreMarkers = new Map();
 let scannedOnce = false;  // has a local scan run (or its results been loaded) this session? Distinguishes
                           // "no scan yet — go scan" from "scanned, nothing matched right now".
 
@@ -850,30 +853,101 @@ function selectedCitySellers() {
   return (currentCity()?.stores || []).filter((store) => store.sellerUsername).map((store) => store.sellerUsername);
 }
 
+const mapMarkerIcon = (number, kind) => window.L.divIcon({
+  className: 'city-map-marker-wrap',
+  html: `<span class="city-map-marker ${kind}"><b>${number || ''}</b></span>`,
+  iconSize: kind === 'city' ? [18, 18] : [26, 30],
+  iconAnchor: kind === 'city' ? [9, 9] : [13, 27],
+  popupAnchor: kind === 'city' ? [0, -9] : [0, -27],
+});
+
+function cityStorePopup(store, index) {
+  const count = store.sellerUsername ? (cityCounts[store.sellerUsername] ?? store.inventoryCount) : null;
+  return `<strong>${index + 1}. ${esc(store.name)}</strong><span>${esc(store.address)}</span><b>${store.sellerUsername ? `${cityNumber(count)} items on Discogs` : 'Discogs seller not verified'}</b>`;
+}
+
+function selectCityStore(storeId, opts = {}) {
+  const city = currentCity();
+  const store = city?.stores.find((candidate) => candidate.id === storeId);
+  if (!store) return;
+  document.querySelectorAll('.city-store').forEach((row) => row.classList.toggle('active', row.dataset.store === storeId));
+  const row = document.querySelector(`.city-store[data-store="${storeId}"]`);
+  if (row && opts.scroll !== false) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  const marker = cityStoreMarkers.get(storeId);
+  if (cityLocalMap && opts.pan !== false) cityLocalMap.flyTo([store.lat, store.lon], Math.max(16, cityLocalMap.getZoom()), { duration: .35 });
+  if (marker && opts.popup !== false) marker.openPopup();
+}
+
+function focusCurrentCity() {
+  const city = currentCity();
+  if (!cityWorldMap || !cityLocalMap || !city) return;
+  cityWorldMap.flyTo([city.center.lat, city.center.lon], 5, { duration: .65 });
+  const bounds = window.L.latLngBounds(city.stores.map((store) => [store.lat, store.lon]));
+  cityLocalMap.fitBounds(bounds, { padding: [22, 22], maxZoom: 15 });
+}
+
+function refreshCityMapLayout() {
+  if (cityWorldMap) cityWorldMap.invalidateSize({ pan: false });
+  if (cityLocalMap) cityLocalMap.invalidateSize({ pan: false });
+}
+
 function renderCityMap() {
   const city = currentCity();
-  if (!city) return;
-  const map = $('city-local-map');
-  const width = Math.max(.0001, city.bounds.east - city.bounds.west);
-  const height = Math.max(.0001, city.bounds.north - city.bounds.south);
-  const pins = city.stores.map((store, index) => {
-    const left = Math.max(4, Math.min(96, ((store.lon - city.bounds.west) / width) * 100));
-    const top = Math.max(8, Math.min(94, ((city.bounds.north - store.lat) / height) * 100));
-    return `<button type="button" class="store-pin${store.sellerUsername ? ' online' : ''}" data-store="${esc(store.id)}" title="${esc(store.name)}" style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%"><span>${index + 1}</span></button>`;
-  }).join('');
-  map.innerHTML = `<span class="city-map-label">ANTWERP · ${city.stores.length} STORES</span>
-    <svg viewBox="0 0 500 300" aria-hidden="true">
-      <path class="river" d="M15 -15 C60 52 25 118 83 168 C116 198 85 255 120 325" />
-      <path class="road" d="M85 40L470 255M64 225L446 35M135 8L390 292M85 122L482 114M92 202L450 188" />
-      <path class="road minor" d="M160 22L175 286M250 8L260 295M335 18L350 284M95 80L470 72M80 158L480 151M122 248L452 242" />
-    </svg>${pins}`;
-  map.querySelectorAll('.store-pin').forEach((pin) => pin.addEventListener('click', () => {
-    const id = pin.dataset.store;
-    map.querySelectorAll('.store-pin').forEach((item) => item.classList.toggle('active', item === pin));
-    $('city-stores').querySelectorAll('.city-store').forEach((row) => row.classList.toggle('active', row.dataset.store === id));
-    const row = document.querySelector(`.city-store[data-store="${id}"]`);
-    if (row) row.scrollIntoView({ block: 'nearest' });
-  }));
+  if (!city || cityWorldMap || cityLocalMap) return;
+  if (!window.L) {
+    $('city-world-map').innerHTML = '<div class="map-unavailable">The interactive world map could not start.</div>';
+    $('city-local-map').innerHTML = '<div class="map-unavailable">The interactive Antwerp map could not start.</div>';
+    return;
+  }
+
+  const tileOptions = {
+    attribution: '<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>',
+    minZoom: 1,
+    maxZoom: 19,
+    noWrap: true,
+  };
+  cityWorldMap = window.L.map('city-world-map', { minZoom: 1, maxZoom: 7, worldCopyJump: false }).setView([25, 4], 1);
+  window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', tileOptions).addTo(cityWorldMap);
+  cityWorldMap.attributionControl.setPrefix(false);
+
+  for (const mappedCity of cityCities) {
+    const marker = window.L.marker([mappedCity.center.lat, mappedCity.center.lon], {
+      icon: mapMarkerIcon('', 'city'),
+      title: `Open ${mappedCity.name}`,
+      alt: `${mappedCity.name}, ${mappedCity.country}`,
+      keyboard: true,
+    }).addTo(cityWorldMap);
+    marker.bindTooltip(mappedCity.name, { permanent: true, direction: 'top', offset: [0, -8] });
+    marker.on('click', () => focusCurrentCity());
+  }
+
+  cityLocalMap = window.L.map('city-local-map', { minZoom: 12, maxZoom: 19 });
+  window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', tileOptions).addTo(cityLocalMap);
+  cityLocalMap.attributionControl.setPrefix(false);
+  const localBounds = window.L.latLngBounds([]);
+  city.stores.forEach((store, index) => {
+    localBounds.extend([store.lat, store.lon]);
+    const marker = window.L.marker([store.lat, store.lon], {
+      icon: mapMarkerIcon(index + 1, store.sellerUsername ? 'online' : 'offline'),
+      title: store.name,
+      alt: `${store.name}, ${store.address}`,
+      keyboard: true,
+    }).addTo(cityLocalMap);
+    marker.bindTooltip(store.name, { direction: 'top', offset: [0, -25] });
+    marker.bindPopup(cityStorePopup(store, index));
+    marker.on('click', () => selectCityStore(store.id, { pan: false, popup: false }));
+    cityStoreMarkers.set(store.id, marker);
+  });
+  cityLocalMap.fitBounds(localBounds, { padding: [22, 22], maxZoom: 15 });
+
+  for (const mapElement of [$('city-world-map'), $('city-local-map')]) {
+    mapElement.addEventListener('click', (event) => {
+      const link = event.target.closest && event.target.closest('.leaflet-control-attribution a');
+      if (!link) return;
+      event.preventDefault();
+      openUrl(link.href);
+    });
+  }
 }
 
 function renderCityDirectory(selected = null) {
@@ -890,6 +964,8 @@ function renderCityDirectory(selected = null) {
       <span class="city-store-count"><b>${online ? cityNumber(count) : 'Map only'}</b><small>${online ? 'for sale' : 'seller unlinked'}</small></span>
     </label>`;
   }).join('');
+  city.stores.forEach((store, index) => cityStoreMarkers.get(store.id)?.setPopupContent(cityStorePopup(store, index)));
+  $('city-stores').querySelectorAll('.city-store').forEach((row) => row.addEventListener('click', () => selectCityStore(row.dataset.store, { scroll: false })));
 }
 
 async function refreshCityCounts() {
@@ -1058,7 +1134,11 @@ function setTab(tab) {
   $('city-panel').classList.toggle('hidden', tab !== 'city');
   updateViewCopy();
   render();
-  if (tab === 'city' && !cityCountsLoaded) refreshCityCounts();
+  if (tab === 'city') {
+    renderCityMap();
+    requestAnimationFrame(refreshCityMapLayout);
+    if (!cityCountsLoaded) refreshCityCounts();
+  }
 }
 
 function applyFilters(deals, opts = {}) {
@@ -1924,7 +2004,6 @@ window.addEventListener('DOMContentLoaded', () => {
     const selectedTaxonomies = new Set(cityPrefs.taxonomies);
     document.querySelectorAll('#city-taxonomies input').forEach((input) => { input.checked = selectedTaxonomies.has(input.value); });
   }
-  renderCityMap();
   renderCityDirectory(new Set(Array.isArray(cityPrefs.sellerUsernames) && cityPrefs.sellerUsernames.length ? cityPrefs.sellerUsernames : (currentCity()?.stores || []).filter((store) => store.sellerUsername).map((store) => store.sellerUsername)));
   updateFilterUi();
   updateViewCopy();
@@ -1938,7 +2017,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('city-cancel').addEventListener('click', () => { if (hasApi) window.api.cityDigCancel(); $('city-status').textContent = 'Stopping City Dig…'; });
   $('city-refresh-counts').addEventListener('click', refreshCityCounts);
   $('city-sort').addEventListener('change', renderCityDig);
-  $('city-antwerp-pin').addEventListener('click', () => setTab('city'));
+  $('city-antwerp-pin').addEventListener('click', () => { setTab('city'); requestAnimationFrame(focusCurrentCity); });
   $('city-osm-credit').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://www.openstreetmap.org/copyright'); });
   $('btn-filter-toggle').addEventListener('click', () => setFilterPanel($('btn-filter-toggle').getAttribute('aria-expanded') !== 'true'));
   $('btn-filter-reset').addEventListener('click', resetFilters);

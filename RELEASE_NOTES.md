@@ -1,7 +1,7 @@
 # Unreleased
 
-- **City Dig Antwerp pilot:** a zero-cost local world/city map and nine-store directory using
-  OpenStreetMap-derived data.
+- **City Dig Antwerp pilot:** interactive, zoomable world and street maps plus a nine-store
+  directory, powered by locally bundled Leaflet and OpenStreetMap tiles at no API cost.
 - **Passive first step:** opening City Dig checks only inventory totals for verified sellers.
 - **Explicit inventory load:** users select sellers, priority genres/styles and a 25/50/100-item
   depth before any listing or release details are requested from Discogs.
