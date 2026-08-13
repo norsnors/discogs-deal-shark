@@ -18,6 +18,8 @@ const requiredAppFiles = [
   '/main.js',
   '/scan-policy.js',
   '/scout-policy.js',
+  '/city-dig-policy.js',
+  '/city-dig-data.js',
   '/git-policy.js',
   '/runtime-policy.js',
   '/listing-history.js',

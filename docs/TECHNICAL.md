@@ -226,11 +226,12 @@ from the raw CDN (no token). Only open ⚙ **Settings** to change source:
   *only* for a private repo (fine-grained PAT, *Contents: read-only*). Public repo → leave blank.
 - **Live server** (watcher.js on Fly / localhost): enter the **Server URL** + **Dashboard token**.
 
-The dashboard has three focused views: **Deals** for the daily review queue and price history,
+The dashboard has four focused views: **Deals** for the daily review queue and price history,
 **Rare gems** for wantlist releases that return after having zero stock, and **Scout** for valuable
-records outside the wantlist. It shows a desktop notification for a new deal (see "Finding the real
-diamonds"). HTTP requests and stored tokens stay in Electron's **main** process and never touch the
-rendered page.
+records outside the wantlist. **City Dig** maps physical record stores and can filter small, explicit
+seller-inventory loads by priority genre/style. It shows a desktop notification for a new deal (see
+"Finding the real diamonds"). HTTP requests and stored tokens stay in Electron's **main** process
+and never touch the rendered page.
 
 ### Scan wantlist (local full sweep, on demand)
 
@@ -248,6 +249,20 @@ Scout searches Discogs by **style** or **genre**, filters candidates on an estim
 excludes releases already on the wantlist. A result can be opened on Discogs or added to the
 wantlist with an explicit **Add to wantlist** click. Scout never adds anything to a cart and never
 buys a record.
+
+### City Dig (physical stores and Discogs inventory)
+
+City Dig ships with a small, versioned city/store dataset. The Antwerp pilot uses OpenStreetMap-
+derived coordinates and a local SVG map, so it needs no paid map SDK, tile service or geocoding
+request at runtime. Stores without a confidently verified Discogs username remain visible but
+cannot be scanned.
+
+Opening the tab calls only the Discogs user-profile endpoint for each verified seller and displays
+`num_for_sale`. Listing data loads only after **Load selected inventories**. The renderer sends the
+chosen sellers, taxonomies and a hard limit of 25, 50 or 100 newest listings per store to the main
+process. That process serializes inventory and release requests with the existing scan guard,
+filters vinyl formats, caches release genres/styles for 180 days and persists the last City Dig for
+offline review. Buying and cart actions remain outside the app.
 
 ## Desktop releases
 

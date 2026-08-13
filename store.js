@@ -6,6 +6,7 @@
  *   history.json      { [releaseId]: [ { ts, lowest, numForSale } ... capped ] }
  *   alerted.json      { [releaseId]: { lowest, ts } }   last price we emailed an alert for
  *   suggestions.json  { [releaseId]: { ts, vgplus, vg } }   cached price suggestions
+ *   releases.json     { [releaseId]: { ts, ...release metadata } } City Dig taxonomy cache
  *   deals.json        [ deal, ... ]  newest-first, capped (what the dashboard reads)
  *   gems.json         [ gem, ... ]   rare-appearance alerts (0 for sale -> first copy), newest-first
  *   rare-alerted.json { [releaseId]: { ts, numForSale } }  rare-gem dedupe/cooldown memory
@@ -56,6 +57,7 @@ function makeStore(dir) {
   const alerted = read('alerted.json', {});
   const rareAlerted = read('rare-alerted.json', {}); // rare-gem (0 -> first copy) dedupe memory
   const suggestions = read('suggestions.json', {});
+  const releases = read('releases.json', {});
   const soldMedians = read('soldmedians.json', {}); // real sales-history medians (scraped locally)
   let deals = read('deals.json', []);
   let gems = read('gems.json', []);
@@ -147,6 +149,10 @@ function makeStore(dir) {
     // --- cached price suggestions ---
     getSuggestion(releaseId) { return suggestions[releaseId] || null; },
     setSuggestion(releaseId, v) { suggestions[releaseId] = v; write('suggestions.json', suggestions); },
+
+    // --- cached release taxonomy for City Dig ---
+    getReleaseMeta(releaseId) { return releases[releaseId] || null; },
+    setReleaseMeta(releaseId, v) { releases[releaseId] = v; write('releases.json', releases); },
 
     // --- cached real sales-history medians (from the local residential scrape) ---
     getSoldMedian(releaseId) { return soldMedians[releaseId] || null; },
@@ -265,6 +271,7 @@ if (require.main === module && process.argv.includes('--selftest')) {
 
   s.setAlerted(100, { lowest: 12, ts: 99 });
   s.setSuggestion(100, { ts: 5, vgplus: 30, vg: 18 });
+  s.setReleaseMeta(100, { ts: 6, genres: ['Electronic'], styles: ['Italo-Disco'] });
   s.addDeal({ id: 'd1', releaseId: 100, lowest: 12 });
   s.setRareAlerted(100, { ts: 77, numForSale: 1 });
   s.addGem({ id: 'g1', releaseId: 100, lowest: 40 });
@@ -277,6 +284,7 @@ if (require.main === module && process.argv.includes('--selftest')) {
   s = makeStore(tmp);
   assert.strictEqual(s.getAlerted(100).lowest, 12, 'alerted persisted');
   assert.strictEqual(s.getSuggestion(100).vgplus, 30, 'suggestion persisted');
+  assert.deepStrictEqual(s.getReleaseMeta(100).styles, ['Italo-Disco'], 'release metadata persisted');
   assert.strictEqual(s.getDeals()[0].id, 'd1', 'deal persisted');
   assert.strictEqual(s.trailingMedianLowest(100), 30, 'history persisted');
   assert.strictEqual(s.getRareAlerted(100).ts, 77, 'rare-gem alert memory persisted');

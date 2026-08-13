@@ -1,3 +1,13 @@
+# Unreleased
+
+- **City Dig Antwerp pilot:** a zero-cost local world/city map and nine-store directory using
+  OpenStreetMap-derived data.
+- **Passive first step:** opening City Dig checks only inventory totals for verified sellers.
+- **Explicit inventory load:** users select sellers, priority genres/styles and a 25/50/100-item
+  depth before any listing or release details are requested from Discogs.
+- **Discogs-friendly caching:** release taxonomy is reused for 180 days and all Discogs jobs share
+  the existing single-scan guard.
+
 # Discogs Deal Shark 1.4.0
 
 Deal Watcher has grown teeth. This release introduces the new **Discogs Deal Shark** name and the

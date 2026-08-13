@@ -28,6 +28,17 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('scout:progress', h);
     return () => ipcRenderer.removeListener('scout:progress', h);
   },
+  // City Dig: scan verified physical record-store inventories by city and taxonomy.
+  cityDigData: () => ipcRenderer.invoke('cityDig:data'),
+  cityDigCounts: (cityId) => ipcRenderer.invoke('cityDig:counts', cityId),
+  cityDigRun: (opts) => ipcRenderer.invoke('cityDig:run', opts),
+  cityDigCancel: () => ipcRenderer.invoke('cityDig:cancel'),
+  cityDigLast: () => ipcRenderer.invoke('cityDig:last'),
+  onCityDigProgress: (cb) => {
+    const h = (_e, m) => cb(m);
+    ipcRenderer.on('cityDig:progress', h);
+    return () => ipcRenderer.removeListener('cityDig:progress', h);
+  },
   // Sold-medians git push: last persisted outcome (null = badge hidden) + a manual retry.
   getPushStatus: () => ipcRenderer.invoke('medians:pushStatus'),
   retryPush: () => ipcRenderer.invoke('medians:retryPush'),

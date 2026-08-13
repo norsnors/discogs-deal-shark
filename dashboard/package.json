@@ -26,6 +26,8 @@
       "runtime-policy.js",
       "listing-history.js",
       "scout-policy.js",
+      "city-dig-policy.js",
+      "city-dig-data.js",
       "preload.js",
       "renderer.js",
       "index.html",

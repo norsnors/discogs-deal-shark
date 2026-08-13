@@ -22,16 +22,22 @@ Discogs Deal Shark is a desktop companion for record collectors. It combines you
 wantlist, current marketplace listings, shipping, condition and sold-price references into a small
 daily review queue. Buying always stays on Discogs and always remains manual.
 
-## Three ways to find records
+## Four ways to find records
 
 | View | What it finds |
 |---|---|
 | **Deals** | VG+ or better copies priced below their real market reference, including shipping, price drops and relists. |
 | **Rare gems** | Wantlist releases that had zero copies for sale and have just returned to the market. |
 | **Scout** | Valuable releases outside your wantlist, searched by Discogs style or genre and filtered by an estimated VG+ value. |
+| **City Dig** | Record stores on a local city map, with seller totals first and a genre-focused inventory slice only after an explicit load action. |
 
 Scout excludes releases already on your wantlist. A result is only added when you explicitly press
 **Add to wantlist**.
+
+City Dig starts with an Antwerp pilot. Its bundled store directory and map use OpenStreetMap data,
+so there is no paid maps service or API key. Opening the tab fetches only lightweight inventory
+totals for verified Discogs sellers. You choose the stores, genres/styles and a limit of 25, 50 or
+100 newest listings before loading release details.
 
 ## Download
 
@@ -49,7 +55,7 @@ Scout excludes releases already on your wantlist. A result is only added when yo
 
 1. Install the app for your platform.
 2. Enter your Discogs username and personal access token in the setup wizard.
-3. Press **Scan wantlist**, then review **Deals**, **Rare gems** or start a **Scout** search.
+3. Press **Scan wantlist**, then review **Deals**, **Rare gems**, start a **Scout** search or open **City Dig**.
 
 A full scan can take several minutes for a large wantlist because Discogs rate-limits marketplace
 requests. Results and sold medians are cached locally so later scans can reuse recent work.
@@ -70,6 +76,7 @@ requests. Results and sold medians are cached locally so later scans can reuse r
 - Marketplace requests and secrets stay in Electron's isolated main process.
 - The app never adds a record to a cart and never completes a purchase.
 - Scout changes your wantlist only after an explicit **Add to wantlist** click.
+- City Dig never loads store listings until you explicitly press **Load selected inventories**.
 - The optional cloud watcher runs in your own accounts and can be disabled independently.
 
 ## Development

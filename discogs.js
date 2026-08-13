@@ -137,6 +137,50 @@ function makeClient(opts = {}) {
       year: data.year,
       thumb: data.thumb || (data.images && data.images[0] && data.images[0].uri150) || null,
       uri: data.uri,
+      country: data.country || null,
+      genres: Array.isArray(data.genres) ? data.genres : [],
+      styles: Array.isArray(data.styles) ? data.styles : [],
+      formats: Array.isArray(data.formats) ? data.formats.map((format) => ({
+        name: format.name || '',
+        qty: format.qty || null,
+        descriptions: Array.isArray(format.descriptions) ? format.descriptions : [],
+      })) : [],
+      labels: Array.isArray(data.labels) ? data.labels.map((label) => ({
+        name: label.name || '',
+        catno: label.catno || null,
+      })) : [],
+    };
+  }
+
+  // Public, for-sale inventory for a marketplace seller. City Dig uses small newest-first pages
+  // and enriches their release ids through getRelease; Discogs does not include genre/style in an
+  // inventory row. The normal client throttle therefore remains the source of truth.
+  async function getInventory(username, { page = 1, perPage = 50, sort = 'listed', sortOrder = 'desc' } = {}) {
+    const { data, status } = await req(`/users/${encodeURIComponent(username)}/inventory`, {
+      searchParams: {
+        status: 'For Sale',
+        page: Math.max(1, Number(page) || 1),
+        per_page: Math.min(100, Math.max(1, Number(perPage) || 50)),
+        sort,
+        sort_order: sortOrder === 'asc' ? 'asc' : 'desc',
+      },
+    });
+    if (status === 404 || !data) return { pagination: { page, pages: 0, items: 0 }, listings: [] };
+    return {
+      pagination: data.pagination || { page, pages: 1, items: 0 },
+      listings: Array.isArray(data.listings) ? data.listings : [],
+    };
+  }
+
+  async function getUserProfile(username) {
+    const { data, status } = await req(`/users/${encodeURIComponent(username)}`);
+    if (status === 404 || !data) return null;
+    return {
+      username: data.username || username,
+      name: data.name || '',
+      location: data.location || '',
+      numForSale: Number(data.num_for_sale) || 0,
+      uri: data.uri || `https://www.discogs.com/user/${encodeURIComponent(username)}`,
     };
   }
 
@@ -159,7 +203,7 @@ function makeClient(opts = {}) {
     return data || { id: Number(releaseId) };
   }
 
-  return { req, getWantlist, getMarketplaceStats, getPriceSuggestions, getRelease, searchReleases, addToWantlist, get rateRemaining() { return remaining; } };
+  return { req, getWantlist, getMarketplaceStats, getPriceSuggestions, getRelease, getInventory, getUserProfile, searchReleases, addToWantlist, get rateRemaining() { return remaining; } };
 }
 
 module.exports = { makeClient, API, DEFAULT_UA };
@@ -182,6 +226,12 @@ if (require.main === module && process.argv.includes('--selftest')) {
           : [{ id: 2, basic_information: { id: 100, title: 'B', artists: [{ name: 'X' }], year: 1990 } }] });
       }
       if (u.pathname.includes('/marketplace/stats/')) return json({ num_for_sale: 115, lowest_price: { value: 0.57, currency: 'EUR' }, blocked_from_sale: false });
+      if (u.pathname === '/users/wgwstore/inventory') return json({
+        pagination: { page: 1, pages: 1, items: 1 },
+        listings: [{ id: 55, price: { value: 9, currency: 'EUR' }, release: { id: 777, artist: 'My Mine', title: 'Hypnotic Tango', format: '12\"' } }],
+      });
+      if (u.pathname === '/users/wgwstore') return json({ username: 'wgwstore', name: 'Wallys Groove World', location: 'Antwerp', num_for_sale: 71510 });
+      if (u.pathname === '/releases/777') return json({ id: 777, title: 'Hypnotic Tango', artists: [{ name: 'My Mine' }], genres: ['Electronic'], styles: ['Italo-Disco'], formats: [{ name: 'Vinyl', descriptions: ['12\"'] }] });
       if (u.pathname === '/database/search') return json({
         pagination: { page: 1, pages: 1, items: 1 },
         results: [{ id: 777, title: 'My Mine - Hypnotic Tango', style: ['Italo-Disco'], format: ['Vinyl'] }],
@@ -200,6 +250,15 @@ if (require.main === module && process.argv.includes('--selftest')) {
     const stats = await c.getMarketplaceStats(249504, 'EUR');
     assert.strictEqual(stats.numForSale, 115);
     assert.strictEqual(stats.lowestPrice, 0.57);
+
+    const inventory = await c.getInventory('wgwstore', { perPage: 25 });
+    assert.strictEqual(inventory.listings[0].release.id, 777);
+    const inventoryUrl = new URL(calls.find((x) => new URL(x.url).pathname === '/users/wgwstore/inventory').url);
+    assert.strictEqual(inventoryUrl.searchParams.get('status'), 'For Sale');
+    assert.strictEqual(inventoryUrl.searchParams.get('per_page'), '25');
+    assert.strictEqual((await c.getUserProfile('wgwstore')).numForSale, 71510);
+    const release = await c.getRelease(777);
+    assert.deepStrictEqual(release.styles, ['Italo-Disco']);
 
     const search = await c.searchReleases({ query: 'Italo-Disco', perPage: 50 });
     assert.strictEqual(search.results[0].id, 777);

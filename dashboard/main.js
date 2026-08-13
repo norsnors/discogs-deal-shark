@@ -24,6 +24,8 @@ const { makeMedianPublisher } = require('./median-publisher');
 const { dedupeGems, cloudBusyFromRun, estimateScanEta } = require('./runtime-policy');
 const { makeListingHistory } = require('./listing-history');
 const { normalizeScoutOptions, normalizeSearchResult, suggestionSnapshot, scoutScore, sortScoutResults } = require('./scout-policy');
+const { normalizeCityDigOptions, looksLikeVinyl, normalizeInventoryListing, matchTaxonomies } = require('./city-dig-policy');
+const { CITY_DIG_CITIES } = require('./city-dig-data');
 
 // Preserve settings for users upgrading from Deal Watcher. Electron derives a new user-data folder
 // from productName; switching blindly would make an upgraded app look like a clean install. Fresh
@@ -33,7 +35,7 @@ const APP_DATA_DIR = app.getPath('appData');
 const LEGACY_USER_DATA_DIRS = app.isPackaged
   ? [path.join(APP_DATA_DIR, 'Discogs Deal Watcher')]
   : [path.join(APP_DATA_DIR, 'discogs-deal-dashboard'), path.join(APP_DATA_DIR, 'Electron')];
-const PROFILE_MARKERS = ['settings.json', 'config.json', 'last-scan.json', 'last-scout.json', 'push-status.json', 'state'];
+const PROFILE_MARKERS = ['settings.json', 'config.json', 'last-scan.json', 'last-scout.json', 'last-city-dig.json', 'push-status.json', 'state'];
 function hasDashboardProfile(directory) {
   return PROFILE_MARKERS.some((name) => fs.existsSync(path.join(directory, name)));
 }
@@ -374,7 +376,10 @@ let scrapeAbort = false;
 let scrapeRunning = false;
 let scoutAbort = false;
 let scoutRunning = false;
+let cityDigAbort = false;
+let cityDigRunning = false;
 const SUGGESTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const RELEASE_META_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 const RARE_COOLDOWN_MS = 12 * 60 * 60 * 1000; // per-release cooldown between rare-gem alerts (mirrors the cloud watcher)
 const QUICK_SCAN_SIZE = 250; // a quick scan checks only the top-N highest-priority releases (by watch-score)
 const LAST_SCAN_FILE = () => path.join(app.getPath('userData'), 'last-scan.json');
@@ -722,6 +727,7 @@ function startDiscogsLogin() {
 async function runScrape(win, opts = {}) {
   if (scrapeRunning) throw new Error('A scan is already running.');
   if (scoutRunning) throw new Error('A Scout scan is already running. Stop it before scanning your wantlist.');
+  if (cityDigRunning) throw new Error('City Dig is already scanning a store inventory. Stop it first.');
   // Shared-budget guard: never sweep while the cloud scan is sweeping (see cloudScanActive above) —
   // the caller (renderer) shows why and retries once the cloud run is done.
   const cloudBusy = await cloudScanActive();
@@ -1211,6 +1217,7 @@ function lastScout() {
 async function runScout(win, rawOpts = {}) {
   if (scoutRunning) throw new Error('A Scout scan is already running.');
   if (scrapeRunning) throw new Error('Your wantlist scan is already running. Wait for it to finish first.');
+  if (cityDigRunning) throw new Error('City Dig is already scanning a store inventory. Stop it first.');
   const opts = normalizeScoutOptions(rawOpts);
   scoutRunning = true;
   scoutAbort = false;
@@ -1327,7 +1334,7 @@ async function runScout(win, rawOpts = {}) {
 async function addScoutWant(releaseId) {
   const id = Number(releaseId);
   if (!Number.isInteger(id) || id <= 0) throw new Error('Invalid Discogs release id.');
-  if (scrapeRunning || scoutRunning) throw new Error('Wait for the active scan to finish first.');
+  if (scrapeRunning || scoutRunning || cityDigRunning) throw new Error('Wait for the active scan to finish first.');
   const { makeClient, loadConfig } = loadWatcher();
   const config = loadConfig(configPath());
   if (!config.token || !config.username) throw new Error('Set up your Discogs account first.');
@@ -1339,6 +1346,154 @@ async function addScoutWant(releaseId) {
     try { fs.writeFileSync(LAST_SCOUT_FILE(), JSON.stringify(saved, null, 2)); } catch { /* best effort */ }
   }
   return { ok: true, releaseId: id };
+}
+
+// ---------------------------------------------------------------------------
+// City Dig — browse recent inventory from verified physical record stores.
+// ---------------------------------------------------------------------------
+// Discogs inventory rows do not contain genre/style. We therefore read a small newest-first slice
+// from each selected seller and enrich each unique release through the official releases endpoint.
+// Release taxonomy is cached for 180 days, making repeat digs fast while respecting 60 req/min.
+const LAST_CITY_DIG_FILE = () => path.join(app.getPath('userData'), 'last-city-dig.json');
+
+function lastCityDig() {
+  try {
+    const value = JSON.parse(fs.readFileSync(LAST_CITY_DIG_FILE(), 'utf8'));
+    return value && Array.isArray(value.results) ? value : null;
+  } catch { return null; }
+}
+
+async function cityDigCounts(cityId) {
+  const city = CITY_DIG_CITIES.find((candidate) => candidate.id === String(cityId || ''));
+  if (!city) throw new Error('Unknown City Dig city.');
+  if (scrapeRunning || scoutRunning || cityDigRunning) {
+    return { cityId: city.id, ts: Date.now(), counts: {}, busy: true };
+  }
+  const { makeClient, loadConfig } = loadWatcher();
+  let config = {};
+  try { config = loadConfig(configPath()) || {}; } catch { config = {}; }
+  const client = makeClient({ token: config.token || '', userAgent: config.userAgent, minIntervalMs: config.token ? 1100 : 2500 });
+  const counts = {};
+  for (const store of city.stores.filter((candidate) => candidate.sellerUsername)) {
+    try {
+      const profile = await client.getUserProfile(store.sellerUsername);
+      counts[store.sellerUsername] = profile ? profile.numForSale : null;
+    } catch { counts[store.sellerUsername] = null; }
+  }
+  return { cityId: city.id, ts: Date.now(), counts };
+}
+
+async function runCityDig(win, rawOpts = {}) {
+  if (cityDigRunning) throw new Error('A City Dig scan is already running.');
+  if (scrapeRunning || scoutRunning) throw new Error('Another Discogs scan is already running. Wait for it to finish first.');
+  const opts = normalizeCityDigOptions(rawOpts, CITY_DIG_CITIES);
+  const city = CITY_DIG_CITIES.find((candidate) => candidate.id === opts.cityId);
+  const selectedStores = city.stores.filter((store) => opts.sellerUsernames.includes(store.sellerUsername));
+  const storesBySeller = new Map(selectedStores.map((store) => [store.sellerUsername, store]));
+  cityDigRunning = true;
+  cityDigAbort = false;
+  const send = (message) => { try { win.webContents.send('cityDig:progress', message); } catch { /* window gone */ } };
+
+  try {
+    const { makeClient, makeStore, loadConfig } = loadWatcher();
+    const config = loadConfig(configPath());
+    if (!config.token) throw new Error('No Discogs token configured — open Settings → Discogs account.');
+    if (['EUR', 'USD', 'GBP'].includes(String(config.currency || '').toUpperCase())) opts.currency = String(config.currency).toUpperCase();
+    const client = makeClient({ token: config.token, userAgent: config.userAgent, minIntervalMs: 1100 });
+    const store = makeStore(stateDir());
+    const listings = [];
+    let skippedNonVinyl = 0;
+
+    for (let storeIndex = 0; storeIndex < selectedStores.length && !cityDigAbort; storeIndex += 1) {
+      const selectedStore = selectedStores[storeIndex];
+      let gathered = 0;
+      let page = 1;
+      send({ phase: 'inventory', store: selectedStore.name, storeIndex, stores: selectedStores.length, checked: 0, total: opts.limitPerSeller });
+      while (gathered < opts.limitPerSeller && !cityDigAbort) {
+        const perPage = Math.min(100, opts.limitPerSeller - gathered);
+        const inventory = await client.getInventory(selectedStore.sellerUsername, { page, perPage, sort: 'listed', sortOrder: 'desc' });
+        const batch = inventory.listings || [];
+        gathered += batch.length;
+        for (const raw of batch) {
+          const item = normalizeInventoryListing(raw, selectedStore.sellerUsername);
+          if (!Number.isFinite(item.releaseId) || !Number.isFinite(item.listingId)) continue;
+          if (!looksLikeVinyl(item.format)) { skippedNonVinyl += 1; continue; }
+          listings.push(item);
+        }
+        send({ phase: 'inventory', store: selectedStore.name, storeIndex, stores: selectedStores.length, checked: gathered, total: opts.limitPerSeller });
+        const pages = Number(inventory.pagination && inventory.pagination.pages) || 1;
+        if (!batch.length || page >= pages) break;
+        page += 1;
+      }
+    }
+
+    const metadata = new Map();
+    const uniqueReleaseIds = [...new Set(listings.map((listing) => listing.releaseId))];
+    let cacheHits = 0;
+    let checked = 0;
+    const results = [];
+    for (const releaseId of uniqueReleaseIds) {
+      if (cityDigAbort) break;
+      let meta = store.getReleaseMeta(releaseId);
+      if (meta && meta.ts && Date.now() - meta.ts < RELEASE_META_TTL_MS) cacheHits += 1;
+      else {
+        try {
+          const release = await client.getRelease(releaseId);
+          meta = release ? { ts: Date.now(), ...release } : null;
+          if (meta) store.setReleaseMeta(releaseId, meta);
+        } catch (error) {
+          if (error && error.status === 401) throw error;
+          meta = null;
+        }
+      }
+      if (meta) metadata.set(releaseId, meta);
+      checked += 1;
+      send({ phase: 'taxonomy', checked, total: uniqueReleaseIds.length, found: results.length, cacheHits });
+    }
+
+    for (const listing of listings) {
+      const meta = metadata.get(listing.releaseId);
+      if (!meta) continue;
+      const matchedTaxonomies = matchTaxonomies(meta, opts.taxonomies);
+      if (!matchedTaxonomies.length) continue;
+      const selectedStore = storesBySeller.get(listing.sellerUsername) || {};
+      results.push({
+        ...listing,
+        artist: meta.artist || listing.artist,
+        title: meta.title || listing.title,
+        year: meta.year || listing.year,
+        country: meta.country || null,
+        thumb: meta.thumb || listing.thumb,
+        genres: meta.genres || [],
+        styles: meta.styles || [],
+        labels: meta.labels || [],
+        matchedTaxonomies,
+        storeId: selectedStore.id || null,
+        storeName: selectedStore.name || listing.sellerUsername,
+        storeAddress: selectedStore.address || '',
+        listingUrl: `https://www.discogs.com/sell/item/${listing.listingId}`,
+        sellerUrl: `https://www.discogs.com/seller/${encodeURIComponent(listing.sellerUsername)}/profile`,
+        releaseUrl: `https://www.discogs.com/release/${listing.releaseId}`,
+      });
+    }
+
+    const output = {
+      ts: Date.now(),
+      city: { id: city.id, name: city.name, country: city.country },
+      query: opts,
+      inspected: listings.length,
+      releasesChecked: checked,
+      cacheHits,
+      skippedNonVinyl,
+      aborted: cityDigAbort,
+      results,
+    };
+    try { fs.writeFileSync(LAST_CITY_DIG_FILE(), JSON.stringify(output, null, 2)); } catch { /* persistence is best effort */ }
+    send({ phase: 'done', checked, total: uniqueReleaseIds.length, found: results.length, aborted: cityDigAbort, cacheHits });
+    return output;
+  } finally {
+    cityDigRunning = false;
+  }
 }
 
 function lastScan() {
@@ -1500,6 +1655,11 @@ ipcMain.handle('scout:run', (e, opts) => runScout(BrowserWindow.fromWebContents(
 ipcMain.handle('scout:cancel', () => { scoutAbort = true; return true; });
 ipcMain.handle('scout:last', () => lastScout());
 ipcMain.handle('scout:addWant', (_e, releaseId) => addScoutWant(releaseId));
+ipcMain.handle('cityDig:data', () => CITY_DIG_CITIES);
+ipcMain.handle('cityDig:counts', (_e, cityId) => cityDigCounts(cityId));
+ipcMain.handle('cityDig:run', (e, opts) => runCityDig(BrowserWindow.fromWebContents(e.sender), opts || {}));
+ipcMain.handle('cityDig:cancel', () => { cityDigAbort = true; return true; });
+ipcMain.handle('cityDig:last', () => lastCityDig());
 ipcMain.handle('discogs:loginStatus', () => isDiscogsLoggedIn());
 ipcMain.handle('discogs:login', () => startDiscogsLogin());
 // Medians push status — null hides the badge (packaged installs never push: there's no repo; and
@@ -1823,6 +1983,7 @@ function createWindow() {
     mainWindow = null;
     scrapeAbort = true;
     scoutAbort = true;
+    cityDigAbort = true;
     if (process.platform !== 'darwin') app.quit();
   });
   win.removeMenu();

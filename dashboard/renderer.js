@@ -53,19 +53,39 @@ const DEMO_SCOUT = {
   ],
 };
 
+const DEMO_CITY_DIG = {
+  ts: Date.now(),
+  city: { id: 'antwerp', name: 'Antwerp', country: 'Belgium' },
+  query: { cityId: 'antwerp', sellerUsernames: ['wgwstore', 'Tune-Up-Records'], taxonomies: ['Italo-Disco', 'Synth-pop', 'Electro'], limitPerSeller: 50, currency: 'EUR' },
+  inspected: 100,
+  releasesChecked: 96,
+  cacheHits: 82,
+  skippedNonVinyl: 4,
+  aborted: false,
+  results: [
+    { listingId: 81001, releaseId: 7001, storeId: 'wallys-groove-world', storeName: "Wally's Groove World", storeAddress: 'Lange Nieuwstraat 126', sellerUsername: 'wgwstore', artist: 'My Mine', title: 'Hypnotic Tango', year: 1983, country: 'Italy', price: 14, currency: 'EUR', condition: 'Very Good Plus (VG+)', sleeveCondition: 'Very Good (VG)', format: '12\", Single', styles: ['Italo-Disco', 'Synth-pop'], genres: ['Electronic'], matchedTaxonomies: ['Italo-Disco', 'Synth-pop'], posted: '2026-08-11T12:00:00Z', listingUrl: 'https://www.discogs.com/sell/item/81001', sellerUrl: 'https://www.discogs.com/seller/wgwstore/profile', thumb: '' },
+    { listingId: 81002, releaseId: 7002, storeId: 'tune-up', storeName: 'Tune Up', storeAddress: 'Melkmarkt 20', sellerUsername: 'Tune-Up-Records', artist: 'Koto', title: 'Visitors', year: 1985, country: 'Italy', price: 19.5, currency: 'EUR', condition: 'Near Mint (NM or M-)', sleeveCondition: 'Very Good Plus (VG+)', format: '12\"', styles: ['Italo-Disco'], genres: ['Electronic'], matchedTaxonomies: ['Italo-Disco'], posted: '2026-08-09T12:00:00Z', listingUrl: 'https://www.discogs.com/sell/item/81002', sellerUrl: 'https://www.discogs.com/seller/Tune-Up-Records/profile', thumb: '' },
+  ],
+};
+
 let allDeals = [];
 let allNearMisses = [];   // releases that looked cheap but didn't qualify (scan only) — see "Show near-misses"
 let seenIds = new Set();
 let firstLoad = true;
 let viewMode = 'cloud';   // 'cloud' | 'scan'
 
-let activeTab = 'deals';  // 'deals' | 'gems' | 'scout'
+let activeTab = 'deals';  // 'deals' | 'gems' | 'scout' | 'city'
 let gemsData = { ts: null, gems: [], zeroWatch: [] };
 let seenGemIds = new Set();
 let firstGemLoad = true;
 let scanning = false;
 let scouting = false;
 let scoutData = { ts: null, query: null, inspected: 0, candidates: 0, excludedWantlist: 0, aborted: false, results: [] };
+let cityDigging = false;
+let cityCountsLoaded = false;
+let cityCities = Array.isArray(window.CITY_DIG_CITIES) ? window.CITY_DIG_CITIES : [];
+let cityCounts = {};
+let cityDigData = { ts: null, city: null, query: null, inspected: 0, releasesChecked: 0, cacheHits: 0, skippedNonVinyl: 0, aborted: false, results: [] };
 let scannedOnce = false;  // has a local scan run (or its results been loaded) this session? Distinguishes
                           // "no scan yet — go scan" from "scanned, nothing matched right now".
 
@@ -216,14 +236,17 @@ function resetFilters() {
 function updateViewCopy() {
   const gems = activeTab === 'gems';
   const scout = activeTab === 'scout';
-  $('view-eyebrow').textContent = scout ? 'BEYOND YOUR WANTLIST' : (gems ? 'RARITY WATCH' : 'YOUR WANTLIST');
-  $('view-title').textContent = scout ? 'Scout valuable records you may be missing' : (gems ? 'Rare records that just surfaced' : 'Deals worth opening');
-  $('view-intro').textContent = scout
+  const city = activeTab === 'city';
+  $('view-eyebrow').textContent = city ? 'DIG THE CITY' : (scout ? 'BEYOND YOUR WANTLIST' : (gems ? 'RARITY WATCH' : 'YOUR WANTLIST'));
+  $('view-title').textContent = city ? 'Antwerp record stores, one inventory at a time' : (scout ? 'Scout valuable records you may be missing' : (gems ? 'Rare records that just surfaced' : 'Deals worth opening'));
+  $('view-intro').textContent = city
+    ? 'See every mapped shop for free, then explicitly load a small, genre-focused slice from verified Discogs sellers.'
+    : scout
     ? 'Search Discogs by style or genre, filter on estimated VG+ value, and add promising pressings straight to your wantlist.'
     : (gems
         ? 'First copies after a release was unavailable — price is context, availability is the signal.'
         : 'Verified copies ranked by total value, so the strongest opportunities stay on top.');
-  $('search').placeholder = gems ? 'Search rare records' : 'Search artist or release';
+  $('search').placeholder = city ? 'Search loaded store inventory' : (gems ? 'Search rare records' : 'Search artist or release');
 }
 
 // "No longer listed" means exactly that: the release has NO copies for sale right now — not merely
@@ -749,13 +772,14 @@ function setScoutUI(on) {
   for (const id of ['scout-field', 'scout-query', 'scout-min-value', 'scout-limit', 'scout-run']) $(id).disabled = on;
   $('scout-run').textContent = on ? 'Scouting…' : 'Start scouting';
   $('scout-progress').classList.toggle('hidden', !on);
-  $('btn-fullscan').disabled = on || scanning;
+  $('btn-fullscan').disabled = on || scanning || cityDigging;
+  $('city-run').disabled = on || cityDigging;
   if (on) setServiceBadge(lastHealth); else refreshHealth();
 }
 
 async function startScout(event) {
   if (event) event.preventDefault();
-  if (scouting || scanning) return;
+  if (scouting || scanning || cityDigging) return;
   const opts = currentScoutOptions();
   if (!opts.query) { $('scout-query').focus(); return; }
   try { localStorage.setItem(SCOUT_PREFS_KEY, JSON.stringify(opts)); } catch { /* private mode */ }
@@ -813,19 +837,228 @@ function onScoutProgress(message) {
   else if (message.phase === 'done') $('scout-status').textContent = `Done · ${message.found} records found${message.aborted ? ' (stopped early)' : ''}`;
 }
 
+// --- City Dig: physical stores, then an explicit inventory action -----------------------------
+const CITY_PREFS_KEY = 'ddw-city-dig-prefs-v1';
+const CITY_CONDITION_RANK = { 'Mint (M)': 0, 'Near Mint (NM or M-)': 1, 'Very Good Plus (VG+)': 2, 'Very Good (VG)': 3, 'Good Plus (G+)': 4, 'Good (G)': 5, 'Fair (F)': 6, 'Poor (P)': 7 };
+const cityNumber = (value) => Number.isFinite(Number(value)) ? new Intl.NumberFormat('en-GB').format(Number(value)) : '—';
+
+function currentCity() { return cityCities.find((city) => city.id === 'antwerp') || cityCities[0] || null; }
+
+function selectedCitySellers() {
+  const inputs = [...document.querySelectorAll('.city-store input[data-seller]')].filter((input) => input.dataset.seller);
+  if (inputs.length) return inputs.filter((input) => input.checked).map((input) => input.dataset.seller);
+  return (currentCity()?.stores || []).filter((store) => store.sellerUsername).map((store) => store.sellerUsername);
+}
+
+function renderCityMap() {
+  const city = currentCity();
+  if (!city) return;
+  const map = $('city-local-map');
+  const width = Math.max(.0001, city.bounds.east - city.bounds.west);
+  const height = Math.max(.0001, city.bounds.north - city.bounds.south);
+  const pins = city.stores.map((store, index) => {
+    const left = Math.max(4, Math.min(96, ((store.lon - city.bounds.west) / width) * 100));
+    const top = Math.max(8, Math.min(94, ((city.bounds.north - store.lat) / height) * 100));
+    return `<button type="button" class="store-pin${store.sellerUsername ? ' online' : ''}" data-store="${esc(store.id)}" title="${esc(store.name)}" style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%"><span>${index + 1}</span></button>`;
+  }).join('');
+  map.innerHTML = `<span class="city-map-label">ANTWERP · ${city.stores.length} STORES</span>
+    <svg viewBox="0 0 500 300" aria-hidden="true">
+      <path class="river" d="M15 -15 C60 52 25 118 83 168 C116 198 85 255 120 325" />
+      <path class="road" d="M85 40L470 255M64 225L446 35M135 8L390 292M85 122L482 114M92 202L450 188" />
+      <path class="road minor" d="M160 22L175 286M250 8L260 295M335 18L350 284M95 80L470 72M80 158L480 151M122 248L452 242" />
+    </svg>${pins}`;
+  map.querySelectorAll('.store-pin').forEach((pin) => pin.addEventListener('click', () => {
+    const id = pin.dataset.store;
+    map.querySelectorAll('.store-pin').forEach((item) => item.classList.toggle('active', item === pin));
+    $('city-stores').querySelectorAll('.city-store').forEach((row) => row.classList.toggle('active', row.dataset.store === id));
+    const row = document.querySelector(`.city-store[data-store="${id}"]`);
+    if (row) row.scrollIntoView({ block: 'nearest' });
+  }));
+}
+
+function renderCityDirectory(selected = null) {
+  const city = currentCity();
+  if (!city) return;
+  const keep = selected || new Set(selectedCitySellers());
+  $('city-stores').innerHTML = city.stores.map((store, index) => {
+    const online = !!store.sellerUsername;
+    const count = online ? (cityCounts[store.sellerUsername] ?? store.inventoryCount) : null;
+    const checked = online && keep.has(store.sellerUsername);
+    return `<label class="city-store${online ? '' : ' offline'}" data-store="${esc(store.id)}" title="${online ? 'Verified Discogs seller' : 'Physical store mapped; Discogs seller not verified'}">
+      <input type="checkbox" data-seller="${esc(store.sellerUsername || '')}"${checked ? ' checked' : ''}${online ? '' : ' disabled'} />
+      <span class="city-store-main"><strong>${index + 1}. ${esc(store.name)}</strong><small>${esc(store.address)}${online ? ` · @${esc(store.sellerUsername)}` : ''}</small></span>
+      <span class="city-store-count"><b>${online ? cityNumber(count) : 'Map only'}</b><small>${online ? 'for sale' : 'seller unlinked'}</small></span>
+    </label>`;
+  }).join('');
+}
+
+async function refreshCityCounts() {
+  const city = currentCity();
+  if (!city || cityDigging) return;
+  const button = $('city-refresh-counts');
+  const selected = new Set(selectedCitySellers());
+  button.disabled = true;
+  button.textContent = 'Refreshing counts…';
+  try {
+    if (hasApi && window.api.cityDigCounts) {
+      const response = await window.api.cityDigCounts(city.id);
+      cityCounts = response && response.counts ? response.counts : cityCounts;
+    } else {
+      cityCounts = Object.fromEntries(city.stores.filter((store) => store.sellerUsername).map((store) => [store.sellerUsername, store.inventoryCount]));
+    }
+    cityCountsLoaded = true;
+  } catch { /* bundled counts remain a useful offline fallback */ }
+  finally {
+    renderCityDirectory(selected);
+    button.disabled = false;
+    button.textContent = 'Refresh inventory counts';
+  }
+}
+
+function normalizeCityDigData(value) {
+  if (!value || typeof value !== 'object') return { ts: null, city: null, query: null, inspected: 0, releasesChecked: 0, cacheHits: 0, skippedNonVinyl: 0, aborted: false, results: [] };
+  return {
+    ts: value.ts || null,
+    city: value.city || null,
+    query: value.query || null,
+    inspected: Number(value.inspected) || 0,
+    releasesChecked: Number(value.releasesChecked) || 0,
+    cacheHits: Number(value.cacheHits) || 0,
+    skippedNonVinyl: Number(value.skippedNonVinyl) || 0,
+    aborted: !!value.aborted,
+    results: Array.isArray(value.results) ? value.results : [],
+  };
+}
+
+function currentCityOptions() {
+  return {
+    cityId: currentCity()?.id || 'antwerp',
+    sellerUsernames: selectedCitySellers(),
+    taxonomies: [...document.querySelectorAll('#city-taxonomies input:checked')].map((input) => input.value),
+    limitPerSeller: Number($('city-limit').value) || 50,
+    currency: 'EUR',
+  };
+}
+
+function sortCityResults(items, mode, requested) {
+  const list = items.slice();
+  if (mode === 'price') list.sort((a, b) => (Number(a.price) || 1e9) - (Number(b.price) || 1e9));
+  else if (mode === 'newest') list.sort((a, b) => String(b.posted || '').localeCompare(String(a.posted || '')));
+  else if (mode === 'condition') list.sort((a, b) => (CITY_CONDITION_RANK[a.condition] ?? 9) - (CITY_CONDITION_RANK[b.condition] ?? 9));
+  else {
+    const weights = new Map((requested || []).map((value, index) => [String(value).toLowerCase(), (requested.length - index) * 100]));
+    const score = (item) => (item.matchedTaxonomies || []).reduce((sum, value) => sum + (weights.get(String(value).toLowerCase()) || 0), 0) - (Number(item.price) || 0) / 100;
+    list.sort((a, b) => score(b) - score(a));
+  }
+  return list;
+}
+
+function cityCard(item) {
+  const thumb = item.thumb ? `<img class="thumb" src="${esc(item.thumb)}" alt="" referrerpolicy="no-referrer" />` : '<div class="thumb"></div>';
+  const place = [item.year, item.country].filter(Boolean).join(' · ');
+  const matches = (item.matchedTaxonomies || []).map((value) => `<span class="tag city-match">${esc(value)}</span>`).join('');
+  const taxonomy = [...(item.styles || []), ...(item.genres || [])].filter((value) => !(item.matchedTaxonomies || []).includes(value)).slice(0, 2).map((value) => `<span class="tag">${esc(value)}</span>`).join('');
+  const label = item.labels && item.labels[0] ? item.labels[0] : null;
+  return `<article class="card is-city">
+    ${thumb}
+    <div class="body">
+      <p class="title">${esc(item.title || 'Release ' + item.releaseId)}</p>
+      <p class="artist">${esc(item.artist || '')}${place ? ` · ${esc(place)}` : ''}</p>
+      <div class="price-row"><span class="price">${money(item.price, item.currency)}</span><span class="scout-value-label">asking price</span></div>
+      <div class="ref">${esc(item.condition || 'condition unknown')} · sleeve ${esc(item.sleeveCondition || 'unknown')}</div>
+      <div class="meta"><span class="tag city-store-tag">${esc(item.storeName)}</span>${matches}${taxonomy}${label ? `<span class="tag">${esc(label.name)}${label.catno ? ` · ${esc(label.catno)}` : ''}</span>` : ''}</div>
+      <p class="city-listing-meta">${esc(item.format || 'Vinyl')}${item.posted ? ` · listed ${esc(fmtDateShort(item.posted))}` : ''} · ${esc(item.storeAddress || '')}</p>
+      <div class="scout-actions"><button class="buy city-buy" data-url="${esc(item.listingUrl)}">Open listing →</button><button class="want-add city-seller" data-url="${esc(item.sellerUrl)}">Full store ↗</button></div>
+    </div>
+  </article>`;
+}
+
+function renderCityDig() {
+  const wrap = $('deals');
+  const empty = $('empty');
+  const query = cityDigData.query || currentCityOptions();
+  const search = $('search').value.trim().toLowerCase();
+  let results = cityDigData.results.filter((item) => !search || `${item.artist || ''} ${item.title || ''} ${item.storeName || ''} ${(item.styles || []).join(' ')}`.toLowerCase().includes(search));
+  results = sortCityResults(results, $('city-sort').value, query.taxonomies || []);
+  $('pill-deals').textContent = `${results.length} city finds`;
+  $('resultCount').textContent = cityDigData.ts ? `${results.length} matches · ${cityDigData.inspected} listings read · ${cityDigData.cacheHits} cached` : '';
+  if (!results.length) {
+    wrap.innerHTML = '';
+    empty.classList.remove('hidden');
+    empty.textContent = cityDigData.ts
+      ? `No selected genres were found in the ${cityDigData.inspected} vinyl listings loaded. Try more genres, stores or a deeper load.`
+      : 'Store totals are ready above. Choose one or more verified sellers, then load their newest inventory when you want to dig.';
+    return;
+  }
+  empty.classList.add('hidden');
+  wrap.innerHTML = results.map(cityCard).join('');
+  wrap.querySelectorAll('.city-buy, .city-seller').forEach((button) => button.addEventListener('click', () => openUrl(button.dataset.url)));
+}
+
+function setCityDigUI(on) {
+  cityDigging = on;
+  $('city-run').disabled = on;
+  $('city-limit').disabled = on;
+  $('city-progress').classList.toggle('hidden', !on);
+  $('city-run').textContent = on ? 'Loading inventories…' : 'Load selected inventories';
+  document.querySelectorAll('.city-store input, #city-taxonomies input').forEach((input) => { input.disabled = on || (!input.dataset.seller && input.closest('.city-store')?.classList.contains('offline')); });
+  $('btn-fullscan').disabled = on || scanning || scouting;
+}
+
+async function startCityDig(event) {
+  if (event) event.preventDefault();
+  if (cityDigging || scanning || scouting) return;
+  const opts = currentCityOptions();
+  if (!opts.sellerUsernames.length || !opts.taxonomies.length) return;
+  try { localStorage.setItem(CITY_PREFS_KEY, JSON.stringify(opts)); } catch { /* best effort */ }
+  if (!hasApi) {
+    cityDigData = normalizeCityDigData(DEMO_CITY_DIG);
+    renderCityDig();
+    return;
+  }
+  setCityDigUI(true);
+  $('city-progress-fill').style.width = '2%';
+  $('city-status').textContent = 'Reading store inventory pages…';
+  try {
+    cityDigData = normalizeCityDigData(await window.api.cityDigRun(opts));
+    renderCityDig();
+  } catch (error) {
+    $('deals').innerHTML = '';
+    $('empty').classList.remove('hidden');
+    $('empty').textContent = 'City Dig failed: ' + (error && error.message ? error.message : error);
+  } finally { setCityDigUI(false); }
+}
+
+function onCityDigProgress(message) {
+  if (!message) return;
+  let pctDone = 3;
+  if (message.phase === 'inventory') pctDone = 3 + Math.round((((message.storeIndex || 0) + (message.checked / Math.max(1, message.total))) / Math.max(1, message.stores)) * 17);
+  if (message.phase === 'taxonomy') pctDone = 20 + Math.round((message.checked / Math.max(1, message.total)) * 80);
+  if (message.phase === 'done') pctDone = 100;
+  $('city-progress-fill').style.width = Math.min(100, pctDone) + '%';
+  if (message.phase === 'inventory') $('city-status').textContent = `Reading ${message.store} · ${message.checked}/${message.total} newest listings`;
+  else if (message.phase === 'taxonomy') $('city-status').textContent = `Matching genres ${message.checked}/${message.total} · ${message.cacheHits || 0} from cache`;
+  else if (message.phase === 'done') $('city-status').textContent = `Done · ${message.found} matching listings${message.aborted ? ' (stopped early)' : ''}`;
+}
+
 function setTab(tab) {
   activeTab = tab;
   document.body.classList.toggle('tab-gems', tab === 'gems');
   document.body.classList.toggle('tab-scout', tab === 'scout');
+  document.body.classList.toggle('tab-city', tab === 'city');
   $('tab-deals').classList.toggle('active', tab === 'deals');
   $('tab-gems').classList.toggle('active', tab === 'gems');
   $('tab-scout').classList.toggle('active', tab === 'scout');
+  $('tab-city').classList.toggle('active', tab === 'city');
   $('tab-deals').setAttribute('aria-selected', tab === 'deals' ? 'true' : 'false');
   $('tab-gems').setAttribute('aria-selected', tab === 'gems' ? 'true' : 'false');
   $('tab-scout').setAttribute('aria-selected', tab === 'scout' ? 'true' : 'false');
+  $('tab-city').setAttribute('aria-selected', tab === 'city' ? 'true' : 'false');
   $('scout-panel').classList.toggle('hidden', tab !== 'scout');
+  $('city-panel').classList.toggle('hidden', tab !== 'city');
   updateViewCopy();
   render();
+  if (tab === 'city' && !cityCountsLoaded) refreshCityCounts();
 }
 
 function applyFilters(deals, opts = {}) {
@@ -871,6 +1104,7 @@ let enrichCache = { src: null, ship: null, list: [] };
 function render() {
   if (activeTab === 'gems') return renderGems();
   if (activeTab === 'scout') return renderScout();
+  if (activeTab === 'city') return renderCityDig();
   const ship = shipVal();
   if (enrichCache.src !== allDeals || enrichCache.ship !== ship) enrichCache = { src: allDeals, ship, list: allDeals.map(enrich) };
   const enriched = enrichCache.list;
@@ -1157,8 +1391,9 @@ function fmtEta(ms) {
 function setScanUI(on) {
   scanning = on;
   $('scanbar').classList.toggle('hidden', !on);
-  $('btn-fullscan').disabled = on || scouting;
-  $('scout-run').disabled = on || scouting;
+  $('btn-fullscan').disabled = on || scouting || cityDigging;
+  $('scout-run').disabled = on || scouting || cityDigging;
+  $('city-run').disabled = on || cityDigging;
   $('btn-fullscan').innerHTML = on
     ? '<span>Scanning…</span>'
     : '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Scan wantlist</span>';
@@ -1170,7 +1405,7 @@ let scanRetryTimer = null; // pending retry after a cloud-busy postponement (one
 
 async function startScan(opts = {}) {
   if (!hasApi) { alert('Local scan needs the desktop app (run it with npm start).'); return; }
-  if (scanning || scouting) return;
+  if (scanning || scouting || cityDigging) return;
   if (scanRetryTimer) { clearTimeout(scanRetryTimer); scanRetryTimer = null; }
   setScanUI(true);
   $('scan-fill').style.width = '0%';
@@ -1673,6 +1908,8 @@ async function boot() {
   }
   let lastScoutResult = null; try { lastScoutResult = await window.api.scoutLast(); } catch { lastScoutResult = null; }
   if (lastScoutResult) scoutData = normalizeScoutData(lastScoutResult);
+  let lastCityResult = null; try { lastCityResult = await window.api.cityDigLast(); } catch { lastCityResult = null; }
+  if (lastCityResult) cityDigData = normalizeCityDigData(lastCityResult);
   render();
   refreshHealth();
 }
@@ -1681,13 +1918,28 @@ async function boot() {
 window.addEventListener('DOMContentLoaded', () => {
   applyFilterState(readFilterState());
   applyScoutPrefs(loadScoutPrefs());
+  let cityPrefs = {}; try { cityPrefs = JSON.parse(localStorage.getItem(CITY_PREFS_KEY) || '{}'); } catch { cityPrefs = {}; }
+  if ([25, 50, 100].includes(Number(cityPrefs.limitPerSeller))) $('city-limit').value = String(cityPrefs.limitPerSeller);
+  if (Array.isArray(cityPrefs.taxonomies) && cityPrefs.taxonomies.length) {
+    const selectedTaxonomies = new Set(cityPrefs.taxonomies);
+    document.querySelectorAll('#city-taxonomies input').forEach((input) => { input.checked = selectedTaxonomies.has(input.value); });
+  }
+  renderCityMap();
+  renderCityDirectory(new Set(Array.isArray(cityPrefs.sellerUsernames) && cityPrefs.sellerUsernames.length ? cityPrefs.sellerUsernames : (currentCity()?.stores || []).filter((store) => store.sellerUsername).map((store) => store.sellerUsername)));
   updateFilterUi();
   updateViewCopy();
   $('tab-deals').addEventListener('click', () => setTab('deals'));
   $('tab-gems').addEventListener('click', () => setTab('gems'));
   $('tab-scout').addEventListener('click', () => setTab('scout'));
+  $('tab-city').addEventListener('click', () => setTab('city'));
   $('scout-form').addEventListener('submit', startScout);
   $('scout-cancel').addEventListener('click', () => { if (hasApi) window.api.scoutCancel(); $('scout-status').textContent = 'Stopping Scout…'; });
+  $('city-form').addEventListener('submit', startCityDig);
+  $('city-cancel').addEventListener('click', () => { if (hasApi) window.api.cityDigCancel(); $('city-status').textContent = 'Stopping City Dig…'; });
+  $('city-refresh-counts').addEventListener('click', refreshCityCounts);
+  $('city-sort').addEventListener('change', renderCityDig);
+  $('city-antwerp-pin').addEventListener('click', () => setTab('city'));
+  $('city-osm-credit').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://www.openstreetmap.org/copyright'); });
   $('btn-filter-toggle').addEventListener('click', () => setFilterPanel($('btn-filter-toggle').getAttribute('aria-expanded') !== 'true'));
   $('btn-filter-reset').addEventListener('click', resetFilters);
   $('btn-fullscan').addEventListener('click', () => startScan({ fullMedians: true }));
@@ -1739,6 +1991,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   if (hasApi) window.api.onScrapeProgress(onScanProgress);
   if (hasApi) window.api.onScoutProgress(onScoutProgress);
+  if (hasApi && window.api.onCityDigProgress) window.api.onCityDigProgress(onCityDigProgress);
   if (hasApi && window.api.onVerifyProgress) window.api.onVerifyProgress((m) => {
     verifyInfo = { running: m.phase === 'verifying', done: m.done || 0, total: m.total || 0 };
     if (activeTab === 'deals' && viewMode !== 'scan') render(); // updates the "checking listings n/m" note
@@ -1747,6 +2000,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Static browser preview hook used by visual QA; the desktop app never has this hash.
   if (!hasApi && location.hash === '#scout') { scoutData = normalizeScoutData(DEMO_SCOUT); setTab('scout'); }
+  if (!hasApi && location.hash === '#city') { cityDigData = normalizeCityDigData(DEMO_CITY_DIG); setTab('city'); }
 
   boot();                         // first-run wizard, last scan, or cloud poll — and lights up the badge
   refreshGems();                  // fill the 💎 Rare tab (works in every source mode; demo in preview)

@@ -324,6 +324,9 @@ body.tab-scout .eyebrow { color: var(--accent); }
 
 body.tab-gems #rule-summary, body.tab-gems #btn-filter-toggle, body.tab-gems #filter-panel,
 body.tab-scout .discovery-bar, body.tab-scout #filter-panel { display: none !important; }
+body.tab-city #filter-panel, body.tab-city .rule-summary, body.tab-city #btn-filter-toggle { display: none !important; }
+body.tab-city .discovery-bar { grid-template-columns: minmax(220px, 520px); }
+body.tab-city .eyebrow { color: #ee9b52; }
 
 /* Scout: deliberately separate from deal filtering. This searches the database beyond the wantlist. */
 .scout-panel {
@@ -367,6 +370,69 @@ body.tab-scout .discovery-bar, body.tab-scout #filter-panel { display: none !imp
 .card .scout-actions .want-add { padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: transparent; font-size: 10.5px; font-weight: 700; cursor: pointer; }
 .card .scout-actions .want-add:hover { border-color: #2c704e; color: var(--green); background: rgba(42,199,120,.06); }
 .card .scout-actions .want-add:disabled { color: var(--green); border-color: #285f44; cursor: default; opacity: .85; }
+
+/* City Dig: a dependency-free world/city map plus explicit, rate-limited inventory loading. */
+.city-icon { color: #f0a15c; font-size: 16px; }
+.city-panel { margin: 0 24px 18px; }
+.city-layout { display: grid; grid-template-columns: minmax(440px, 1.5fr) minmax(285px, .8fr); gap: 14px; }
+.city-map-stack { display: grid; grid-template-columns: .9fr 1.1fr; gap: 10px; min-height: 280px; }
+.world-map, .city-local-map, .city-directory { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #0b1118; }
+.world-map svg { width: 100%; height: 100%; min-height: 280px; opacity: .8; }
+.world-map svg path { fill: #1a2a37; stroke: #2b4355; stroke-width: 2; }
+.world-map::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 51% 32%, rgba(237,143,70,.16), transparent 20%), linear-gradient(transparent 49%, rgba(99,145,174,.05) 50%, transparent 51%); }
+.world-pin { position: absolute; left: 51.2%; top: 31%; z-index: 2; display: grid; justify-items: center; gap: 3px; padding: 0; border: 0; color: #ffd4ae; background: transparent; cursor: pointer; transform: translate(-50%, -50%); }
+.world-pin span { width: 11px; height: 11px; border: 3px solid #ffd2aa; border-radius: 50%; background: #e87532; box-shadow: 0 0 0 7px rgba(232,117,50,.16), 0 0 22px rgba(232,117,50,.75); }
+.world-pin b { padding: 3px 6px; border: 1px solid #67452e; border-radius: 6px; background: rgba(12,17,22,.9); font-size: 9px; letter-spacing: .04em; }
+.world-map-caption { position: absolute; left: 12px; bottom: 11px; display: flex; flex-direction: column; gap: 2px; }
+.world-map-caption span, .city-kicker { color: #d6864a; font-size: 8px; font-weight: 800; letter-spacing: .14em; }
+.world-map-caption b { color: #d5dee6; font-size: 10px; }
+.city-local-map { min-height: 280px; background: radial-gradient(circle at 65% 42%, rgba(55,95,122,.14), transparent 38%), #101821; }
+.city-local-map svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.city-local-map .river { fill: none; stroke: #17384c; stroke-width: 22; opacity: .75; }
+.city-local-map .road { fill: none; stroke: #293744; stroke-width: 2; opacity: .9; }
+.city-local-map .road.minor { stroke-width: 1; opacity: .55; }
+.city-map-label { position: absolute; left: 12px; top: 11px; z-index: 2; color: #8294a4; font-size: 9px; font-weight: 800; letter-spacing: .12em; }
+.store-pin { position: absolute; z-index: 3; width: 24px; height: 24px; padding: 0; border: 2px solid #f0a15c; border-radius: 50% 50% 50% 0; color: #fff4e9; background: #b55727; box-shadow: 0 5px 14px rgba(0,0,0,.35); font-size: 9px; font-weight: 800; cursor: pointer; transform: translate(-50%, -80%) rotate(-45deg); }
+.store-pin span { display: block; transform: rotate(45deg); }
+.store-pin.online { border-color: #6ce2a4; background: #19754a; }
+.store-pin:hover, .store-pin.active { z-index: 4; filter: brightness(1.25); box-shadow: 0 0 0 6px rgba(240,161,92,.12); }
+.city-directory { padding: 15px; background: linear-gradient(160deg, #111922, #0d141b); }
+.city-directory-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.city-directory-head h3 { margin: 3px 0 0; color: #f3f6f8; font-size: 23px; }
+.free-badge { padding: 5px 7px; border: 1px solid #2b664c; border-radius: 999px; color: #80dca9; background: rgba(36,122,79,.1); font-size: 8.5px; font-weight: 800; white-space: nowrap; }
+.city-directory-copy { margin: 9px 0 12px; color: var(--muted); font-size: 9.5px; line-height: 1.45; }
+.city-stores { display: grid; gap: 6px; max-height: 174px; overflow: auto; padding-right: 4px; }
+.city-store { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid #202d38; border-radius: 9px; background: #0b1218; }
+.city-store:hover, .city-store.active { border-color: #4c5f70; }
+.city-store input { accent-color: #d97839; }
+.city-store input:disabled { opacity: .35; }
+.city-store-main { min-width: 0; }
+.city-store-main strong { display: block; overflow: hidden; color: #dfe7ed; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.city-store-main small { display: block; overflow: hidden; margin-top: 2px; color: #6f8292; font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
+.city-store-count { text-align: right; }
+.city-store-count b { display: block; color: #f0b17b; font-size: 10px; }
+.city-store-count small { color: #667887; font-size: 7.5px; text-transform: uppercase; }
+.city-store.offline .city-store-count b { color: #697a87; }
+.city-refresh { margin-top: 9px; padding: 0; font-size: 9px; }
+.map-credit { margin: 10px 0 0; color: #586a78; font-size: 8px; }
+.map-credit a { color: #7794a8; }
+.city-controls { display: grid; grid-template-columns: minmax(300px, 1fr) 135px 155px auto; gap: 10px; align-items: end; margin-top: 11px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #10171e; }
+.city-controls fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.city-controls legend, .city-controls > label > span { display: block; margin: 0 0 6px 2px; color: var(--muted); font-size: 8.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.city-controls select { width: 100%; height: 38px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: #0b1117; font-size: 10px; }
+.taxonomy-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.taxonomy-chips input { position: absolute; opacity: 0; pointer-events: none; }
+.taxonomy-chips span { display: block; padding: 5px 7px; border: 1px solid #2a3844; border-radius: 999px; color: #8193a2; background: #0b1117; font-size: 8.5px; cursor: pointer; }
+.taxonomy-chips input:checked + span { border-color: #9a5a32; color: #ffd0aa; background: rgba(197,93,37,.14); }
+.city-run { height: 38px; white-space: nowrap; background: #a85429; }
+.city-run:hover { background: #bd6332; }
+.city-run:disabled, .city-controls select:disabled { opacity: .55; cursor: default; }
+.card.is-city { border-color: #4a3325; }
+.card.is-city:hover { border-color: #8b5835; }
+.card.is-city .price { color: #f0aa6c; }
+.tag.city-match { color: #ffc18b; border-color: #7b4b2d; }
+.tag.city-store-tag { color: #8fddb2; border-color: #35634b; }
+.city-listing-meta { margin-top: 6px; color: var(--muted); font-size: 9px; }
 
 /* Result grid */
 .deals {
@@ -510,6 +576,10 @@ button.ghost:hover { background: var(--panel-2); }
   .filter-grid { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
   .scout-controls { grid-template-columns: 120px minmax(180px, 1fr) 125px 130px; }
   .scout-run { grid-column: 1 / -1; }
+  .city-layout { grid-template-columns: 1fr; }
+  .city-controls { grid-template-columns: 1fr 1fr; }
+  .city-controls fieldset { grid-column: 1 / -1; }
+  .city-run { grid-column: 1 / -1; }
 }
 @media (max-width: 700px) {
   .topbar { padding-inline: 14px; }
@@ -518,7 +588,7 @@ button.ghost:hover { background: var(--panel-2); }
   .actions button.scan { min-width: 42px; width: 42px; padding: 0; }
   .actions button.scan span { display: none; }
   .view-header { padding-inline: 16px; }
-  .tabs, .discovery-bar, .filters, .scout-panel { margin-left: 14px; margin-right: 14px; }
+  .tabs, .discovery-bar, .filters, .scout-panel, .city-panel { margin-left: 14px; margin-right: 14px; }
   .rule-summary { display: none; }
   .filter-grid { grid-template-columns: repeat(2, minmax(135px, 1fr)); }
   .deals { grid-template-columns: 1fr; padding-inline: 14px; }
@@ -526,4 +596,8 @@ button.ghost:hover { background: var(--panel-2); }
   .scout-query { grid-column: 1 / -1; }
   .scout-progress { grid-template-columns: 1fr auto; }
   .scout-progress .scanbar-track { grid-column: 1 / -1; }
+  .city-map-stack { grid-template-columns: 1fr; }
+  .world-map { display: none; }
+  .city-controls { grid-template-columns: 1fr; }
+  .city-controls fieldset, .city-run { grid-column: auto; }
 }
