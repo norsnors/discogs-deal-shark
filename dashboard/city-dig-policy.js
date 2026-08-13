@@ -107,6 +107,7 @@ module.exports = {
 
 if (require.main === module && process.argv.includes('--selftest')) {
   const assert = require('assert');
+  const { CITY_DIG_CITIES } = require('./city-dig-data');
   const cities = [{ id: 'antwerp', stores: [{ sellerUsername: 'wgwstore' }, { sellerUsername: null }] }];
   assert.deepStrictEqual(normalizeCityDigOptions({ cityId: 'antwerp', sellerUsernames: [], taxonomies: [' Italo-Disco ', 'italo-disco'], limitPerSeller: 25 }, cities), {
     cityId: 'antwerp', sellerUsernames: ['wgwstore'], taxonomies: ['Italo-Disco'], limitPerSeller: 100, currency: 'EUR',
@@ -118,5 +119,13 @@ if (require.main === module && process.argv.includes('--selftest')) {
   assert.strictEqual(listing.releaseId, 8);
   assert.deepStrictEqual(matchTaxonomies({ genres: ['Electronic'], styles: ['Italo-Disco'] }, ['Disco', 'Italo-Disco']), ['Italo-Disco']);
   assert.strictEqual(sortCityDigResults([{ price: 20 }, { price: 3 }], 'price')[0].price, 3);
+  const antwerp = CITY_DIG_CITIES.find((city) => city.id === 'antwerp');
+  assert.ok(antwerp && antwerp.stores.length >= 21, 'Antwerp physical-store guide stays complete');
+  assert.strictEqual(new Set(antwerp.stores.map((store) => store.id)).size, antwerp.stores.length, 'Antwerp store ids are unique');
+  assert.deepStrictEqual(antwerp.stores.filter((store) => store.sellerUsername).map((store) => store.sellerUsername), ['wgwstore', 'Tune-Up-Records', 'Backtrack-Antwerp', 'warrecordsantwerp', 'KalkmanVinylRecords', 'Morbus_Gravis', 'Sound_Architecture']);
+  for (const store of antwerp.stores) {
+    assert.ok(store.name && store.address && Number.isFinite(store.lat) && Number.isFinite(store.lon), `${store.id} has map data`);
+    assert.ok(store.channel, `${store.id} has an explicit online-channel status`);
+  }
   console.log('city-dig-policy selftest: all assertions passed');
 }

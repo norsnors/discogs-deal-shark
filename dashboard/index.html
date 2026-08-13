@@ -132,7 +132,7 @@
             <div><span class="city-kicker">BELGIUM · PILOT CITY</span><h3>Antwerp</h3></div>
             <span class="free-badge">€0 · OpenStreetMap</span>
           </div>
-          <p class="city-directory-copy">Opening this tab only checks store inventory totals. The button below then loads the first 100 vinyl listings from every verified Discogs store in the city.</p>
+          <p id="city-directory-copy" class="city-directory-copy">Mapping Antwerp record shops and checking connected Discogs inventory totals…</p>
           <div id="city-stores" class="city-stores"></div>
           <button id="city-refresh-counts" class="text-button city-refresh" type="button">Refresh inventory counts</button>
           <p class="map-credit">Map data © <a id="city-osm-credit" href="#">OpenStreetMap contributors</a> · ODbL</p>
@@ -159,7 +159,7 @@
         </fieldset>
         <label><span>Load per store</span><select id="city-limit" disabled><option value="100" selected>100 newest</option></select></label>
         <label><span>Order matches</span><select id="city-sort"><option value="match">Best genre match</option><option value="newest">Newest listing</option><option value="price">Lowest price</option><option value="condition">Best condition</option></select></label>
-        <button id="city-run" class="primary city-run" type="submit">Load first 100 from every store</button>
+        <button id="city-run" class="primary city-run" type="submit">Load first 100 from 7 Discogs stores</button>
       </form>
       <div id="city-progress" class="scout-progress hidden">
         <div class="scanbar-track"><div class="scanbar-fill" id="city-progress-fill"></div></div>

@@ -390,6 +390,7 @@ body.tab-city .eyebrow { color: #ee9b52; }
 .city-panel .leaflet-popup-content strong { display: block; color: #fff3e7; font-size: 11px; }
 .city-panel .leaflet-popup-content span { display: block; margin-top: 2px; color: #8ea0ae; font-size: 9px; }
 .city-panel .leaflet-popup-content b { display: block; margin-top: 6px; color: #efaa70; font-size: 9px; }
+.city-panel .leaflet-popup-content .city-popup-link { display: inline-block; margin-top: 6px; color: #8fd5ff; font-size: 8.5px; font-weight: 800; text-decoration: none; }
 .city-panel .leaflet-tooltip { border-color: #3d5262; color: #eef4f7; background: #101820; box-shadow: 0 4px 14px rgba(0,0,0,.35); font-size: 9px; font-weight: 700; }
 .map-focus-city { position: absolute; right: 10px; top: 10px; z-index: 500; padding: 6px 8px; border: 1px solid #6d472d; border-radius: 8px; color: #ffd7b2; background: rgba(12,17,22,.92); font-size: 9px; font-weight: 800; cursor: pointer; }
 .map-focus-city:hover { border-color: #e38a4a; background: #1b2228; }
@@ -400,6 +401,8 @@ body.tab-city .eyebrow { color: #ee9b52; }
 .city-map-marker { display: grid; width: 26px; height: 26px; place-items: center; border: 2px solid #ffd0aa; border-radius: 50% 50% 50% 0; color: #fff; background: #b65727; box-shadow: 0 4px 14px rgba(0,0,0,.48); font-size: 9px; font-weight: 900; transform: rotate(-45deg); }
 .city-map-marker b { transform: rotate(45deg); }
 .city-map-marker.online { border-color: #8ff0ba; background: #19754a; }
+.city-map-marker.pending { border-color: #ffe09a; background: #9a6a20; }
+.city-map-marker.webshop { border-color: #9ad9ff; background: #27688d; }
 .city-map-marker.city { width: 18px; height: 18px; border: 3px solid #ffd0aa; border-radius: 50%; background: #e87532; box-shadow: 0 0 0 7px rgba(232,117,50,.17), 0 0 24px rgba(232,117,50,.72); transform: none; }
 .city-map-marker.city b { display: none; }
 .map-unavailable { display: grid; min-height: 280px; place-items: center; padding: 30px; color: #95a8b6; text-align: center; }
@@ -413,6 +416,9 @@ body.tab-city .eyebrow { color: #ee9b52; }
 .city-store:hover, .city-store.active { border-color: #4c5f70; }
 .city-store input { accent-color: #d97839; }
 .city-store input:disabled { opacity: .35; }
+.city-store.online input { opacity: 1; }
+.city-store.pending input { accent-color: #d5a037; opacity: .6; }
+.city-store.webshop input { accent-color: #4b9cca; opacity: .5; }
 .city-store-main { min-width: 0; }
 .city-store-main strong { display: block; overflow: hidden; color: #dfe7ed; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .city-store-main small { display: block; overflow: hidden; margin-top: 2px; color: #6f8292; font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
@@ -420,6 +426,10 @@ body.tab-city .eyebrow { color: #ee9b52; }
 .city-store-count b { display: block; color: #f0b17b; font-size: 10px; }
 .city-store-count small { color: #667887; font-size: 7.5px; text-transform: uppercase; }
 .city-store.offline .city-store-count b { color: #697a87; }
+.city-store.pending .city-store-count b { color: #e8be67; }
+.city-store.webshop .city-store-count b { color: #84c7ed; }
+.city-store-link { display: block; margin: 3px 0 0 auto; padding: 0; border: 0; color: #7895aa; background: transparent; font: inherit; font-size: 7.5px; font-weight: 800; cursor: pointer; }
+.city-store-link:hover { color: #c9e8fa; }
 .city-refresh { margin-top: 9px; padding: 0; font-size: 9px; }
 .map-credit { margin: 10px 0 0; color: #586a78; font-size: 8px; }
 .map-credit a { color: #7794a8; }

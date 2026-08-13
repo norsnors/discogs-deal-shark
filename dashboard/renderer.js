@@ -243,7 +243,7 @@ function updateViewCopy() {
   $('view-eyebrow').textContent = city ? 'DIG THE CITY' : (scout ? 'BEYOND YOUR WANTLIST' : (gems ? 'RARITY WATCH' : 'YOUR WANTLIST'));
   $('view-title').textContent = city ? 'Antwerp record stores, one inventory at a time' : (scout ? 'Scout valuable records you may be missing' : (gems ? 'Rare records that just surfaced' : 'Deals worth opening'));
   $('view-intro').textContent = city
-    ? 'See every mapped shop for free, then load the first 100 vinyl listings from every verified Discogs seller in the city.'
+    ? 'See every mapped shop for free, then load the first 100 vinyl listings from every connected Discogs seller in the city.'
     : scout
     ? 'Search Discogs by style or genre, filter on estimated VG+ value, and add promising pressings straight to your wantlist.'
     : (gems
@@ -851,6 +851,26 @@ function selectedCitySellers() {
   return (currentCity()?.stores || []).filter((store) => store.sellerUsername).map((store) => store.sellerUsername);
 }
 
+function cityRunIdleLabel() {
+  const count = selectedCitySellers().length;
+  return `Load first 100 from ${count} Discogs store${count === 1 ? '' : 's'}`;
+}
+
+function cityStoreUrl(store) {
+  if (store.sellerUsername) return `https://www.discogs.com/seller/${encodeURIComponent(store.sellerUsername)}/profile`;
+  return store.website || store.osmUrl || '';
+}
+
+function cityStorePresentation(store) {
+  const count = store.sellerUsername ? (cityCounts[store.sellerUsername] ?? store.inventoryCount) : null;
+  if (store.sellerUsername) return { marker: 'online', headline: cityNumber(count), detail: store.inventoryScope === 'shared' ? 'shared catalog' : 'for sale', action: 'Discogs ↗', title: `Verified Discogs seller @${store.sellerUsername}${store.inventoryScope === 'shared' ? ' · inventory is shared with another branch' : ''}` };
+  if (store.channel === 'discogs-unmatched') return { marker: 'pending', headline: 'Discogs?', detail: 'account to match', action: 'Website ↗', title: 'Discogs sales have been reported for this shop, but its exact current seller username still needs a safe match' };
+  if (store.channel === 'webshop') return { marker: 'webshop', headline: 'Webshop', detail: 'browse online', action: 'Open ↗', title: 'Independent shop inventory is available online' };
+  if (store.channel === 'website') return { marker: 'webshop', headline: 'Website', detail: 'store info', action: 'Open ↗', title: 'Store website found; no exact Discogs seller confirmed' };
+  if (store.channel === 'seasonal') return { marker: 'pending', headline: 'Seasonal', detail: 'check first', action: 'Website ↗', title: 'Seasonal Antwerp store; check the website before visiting' };
+  return { marker: 'offline', headline: 'In store', detail: 'no online stock', action: 'Map ↗', title: 'Physical record store found; no current online inventory confirmed' };
+}
+
 const mapMarkerIcon = (number, kind) => window.L.divIcon({
   className: 'city-map-marker-wrap',
   html: `<span class="city-map-marker ${kind}"><b>${number || ''}</b></span>`,
@@ -860,8 +880,9 @@ const mapMarkerIcon = (number, kind) => window.L.divIcon({
 });
 
 function cityStorePopup(store, index) {
-  const count = store.sellerUsername ? (cityCounts[store.sellerUsername] ?? store.inventoryCount) : null;
-  return `<strong>${index + 1}. ${esc(store.name)}</strong><span>${esc(store.address)}</span><b>${store.sellerUsername ? `${cityNumber(count)} items on Discogs` : 'Discogs seller not verified'}</b>`;
+  const state = cityStorePresentation(store);
+  const url = cityStoreUrl(store);
+  return `<strong>${index + 1}. ${esc(store.name)}</strong><span>${esc(store.address)}</span><b>${esc(state.headline)} · ${esc(state.detail)}</b>${url ? `<a class="city-popup-link" href="${esc(url)}">${esc(state.action)}</a>` : ''}`;
 }
 
 function selectCityStore(storeId, opts = {}) {
@@ -926,7 +947,7 @@ function renderCityMap() {
   city.stores.forEach((store, index) => {
     localBounds.extend([store.lat, store.lon]);
     const marker = window.L.marker([store.lat, store.lon], {
-      icon: mapMarkerIcon(index + 1, store.sellerUsername ? 'online' : 'offline'),
+      icon: mapMarkerIcon(index + 1, cityStorePresentation(store).marker),
       title: store.name,
       alt: `${store.name}, ${store.address}`,
       keyboard: true,
@@ -940,7 +961,7 @@ function renderCityMap() {
 
   for (const mapElement of [$('city-world-map'), $('city-local-map')]) {
     mapElement.addEventListener('click', (event) => {
-      const link = event.target.closest && event.target.closest('.leaflet-control-attribution a');
+      const link = event.target.closest && event.target.closest('.leaflet-control-attribution a, .city-popup-link');
       if (!link) return;
       event.preventDefault();
       openUrl(link.href);
@@ -952,18 +973,24 @@ function renderCityDirectory(selected = null) {
   const city = currentCity();
   if (!city) return;
   const keep = selected || new Set(selectedCitySellers());
+  const linked = city.stores.filter((store) => store.sellerUsername).length;
+  const unmatched = city.stores.filter((store) => store.channel === 'discogs-unmatched').length;
+  $('city-directory-copy').textContent = `${city.stores.length} physical record shops mapped · ${linked} exact Discogs stores connected${unmatched ? ` · ${unmatched} possible Discogs accounts still to match` : ''}. Opening this tab only checks the connected inventory totals.`;
   $('city-stores').innerHTML = city.stores.map((store, index) => {
     const online = !!store.sellerUsername;
-    const count = online ? (cityCounts[store.sellerUsername] ?? store.inventoryCount) : null;
     const checked = online && keep.has(store.sellerUsername);
-    return `<label class="city-store${online ? '' : ' offline'}" data-store="${esc(store.id)}" title="${online ? 'Verified Discogs seller' : 'Physical store mapped; Discogs seller not verified'}">
+    const state = cityStorePresentation(store);
+    const url = cityStoreUrl(store);
+    return `<div class="city-store ${esc(state.marker)}" data-store="${esc(store.id)}" title="${esc(state.title)}">
       <input type="checkbox" data-seller="${esc(store.sellerUsername || '')}"${checked ? ' checked' : ''} disabled />
       <span class="city-store-main"><strong>${index + 1}. ${esc(store.name)}</strong><small>${esc(store.address)}${online ? ` · @${esc(store.sellerUsername)}` : ''}</small></span>
-      <span class="city-store-count"><b>${online ? cityNumber(count) : 'Map only'}</b><small>${online ? 'for sale' : 'seller unlinked'}</small></span>
-    </label>`;
+      <span class="city-store-count"><b>${esc(state.headline)}</b><small>${esc(state.detail)}</small>${url ? `<button class="city-store-link" type="button" data-url="${esc(url)}">${esc(state.action)}</button>` : ''}</span>
+    </div>`;
   }).join('');
   city.stores.forEach((store, index) => cityStoreMarkers.get(store.id)?.setPopupContent(cityStorePopup(store, index)));
   $('city-stores').querySelectorAll('.city-store').forEach((row) => row.addEventListener('click', () => selectCityStore(row.dataset.store, { scroll: false })));
+  $('city-stores').querySelectorAll('.city-store-link').forEach((button) => button.addEventListener('click', (event) => { event.stopPropagation(); openUrl(button.dataset.url); }));
+  if (!cityDigging) $('city-run').textContent = cityRunIdleLabel();
 }
 
 async function refreshCityCounts() {
@@ -1063,7 +1090,7 @@ function renderCityDig() {
     empty.classList.remove('hidden');
     empty.textContent = cityDigData.ts
       ? `No vinyl listings were returned by the linked stores.`
-      : 'Store totals are ready above. Load the first 100 vinyl listings from every verified Discogs store when you want to dig.';
+      : 'Store totals are ready above. Load the first 100 vinyl listings from every connected Discogs store when you want to dig.';
     return;
   }
   empty.classList.add('hidden');
@@ -1076,7 +1103,7 @@ function setCityDigUI(on) {
   $('city-run').disabled = on;
   $('city-limit').disabled = true;
   $('city-progress').classList.toggle('hidden', !on);
-  $('city-run').textContent = on ? 'Loading every store…' : 'Load first 100 from every store';
+  $('city-run').textContent = on ? 'Loading every Discogs store…' : cityRunIdleLabel();
   document.querySelectorAll('.city-store input').forEach((input) => { input.disabled = true; });
   document.querySelectorAll('#city-taxonomies input').forEach((input) => { input.disabled = on; });
   $('btn-fullscan').disabled = on || scanning || scouting;

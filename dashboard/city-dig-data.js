@@ -1,11 +1,13 @@
 'use strict';
 
 /*
- * City Dig's bundled store guide. Coordinates and OpenStreetMap object references are derived
- * from OpenStreetMap data and distributed under ODbL 1.0: https://www.openstreetmap.org/copyright
- * Store-to-Discogs links are independently verified against the stores' public Discogs profiles.
- * A missing sellerUsername is deliberate: the physical shop is useful on the map, but City Dig
- * will not scan an unverified or guessed marketplace account.
+ * City Dig's bundled physical-store guide. Coordinates and OpenStreetMap object references are
+ * derived from OpenStreetMap data and distributed under ODbL 1.0:
+ * https://www.openstreetmap.org/copyright
+ *
+ * sellerUsername is only set when an exact public Discogs seller profile can be tied to the
+ * physical shop. channel describes the best currently verified online route for every other shop;
+ * an unmatched Discogs account is never guessed because that could load another seller's stock.
  */
 const CITY_DIG_CITIES = [
   {
@@ -13,7 +15,7 @@ const CITY_DIG_CITIES = [
     name: 'Antwerp',
     country: 'Belgium',
     center: { lat: 51.2194, lon: 4.4052 },
-    bounds: { north: 51.2325, south: 51.2115, east: 4.4245, west: 4.3900 },
+    bounds: { north: 51.2325, south: 51.2080, east: 4.4245, west: 4.3900 },
     stores: [
       {
         id: 'chelsea-records',
@@ -22,7 +24,7 @@ const CITY_DIG_CITIES = [
         lat: 51.2173092,
         lon: 4.3956897,
         osmUrl: 'https://www.openstreetmap.org/node/5419041508',
-        sellerUsername: null,
+        channel: 'in-store',
       },
       {
         id: 'wallys-groove-world',
@@ -34,6 +36,7 @@ const CITY_DIG_CITIES = [
         website: 'https://wgwstore.com/',
         sellerUsername: 'wgwstore',
         inventoryCount: 71510,
+        channel: 'discogs',
         specialties: ['Electronic', 'House', 'Techno', 'Disco'],
       },
       {
@@ -45,6 +48,7 @@ const CITY_DIG_CITIES = [
         osmUrl: 'https://www.openstreetmap.org/node/11693621684',
         sellerUsername: 'Tune-Up-Records',
         inventoryCount: 3636,
+        channel: 'discogs',
         specialties: ['Jazz', 'Soul', 'Rock', 'Electronic'],
       },
       {
@@ -54,7 +58,8 @@ const CITY_DIG_CITIES = [
         lat: 51.2200200,
         lon: 4.4136706,
         osmUrl: 'https://www.openstreetmap.org/node/3235183632',
-        sellerUsername: null,
+        website: 'http://inside-records.be/',
+        channel: 'discogs-unmatched',
       },
       {
         id: 'rocking-bull',
@@ -64,7 +69,7 @@ const CITY_DIG_CITIES = [
         lon: 4.4144199,
         osmUrl: 'https://www.openstreetmap.org/way/495911432',
         website: 'https://shop.therockingbull.rocks/',
-        sellerUsername: null,
+        channel: 'webshop',
         specialties: ['Metal', 'Rock'],
       },
       {
@@ -74,7 +79,8 @@ const CITY_DIG_CITIES = [
         lat: 51.2184187,
         lon: 4.3995435,
         osmUrl: 'https://www.openstreetmap.org/way/497226708',
-        sellerUsername: null,
+        website: 'https://recordstoreday.nl/storefinder/sugar-pie-records/',
+        channel: 'website',
         specialties: ['Jazz', 'Funk', 'Soul', 'Hip Hop'],
       },
       {
@@ -84,25 +90,156 @@ const CITY_DIG_CITIES = [
         lat: 51.2146384,
         lon: 4.4207541,
         osmUrl: 'https://www.openstreetmap.org/node/13369861753',
-        sellerUsername: null,
+        channel: 'in-store',
       },
       {
         id: 'backtrack',
-        name: 'Backtrack',
-        address: 'Sint-Katelijnevest',
+        name: 'Backtrack Record Shop',
+        address: 'Sint-Katelijnevest 40',
         lat: 51.2197564,
         lon: 4.4051435,
         osmUrl: 'https://www.openstreetmap.org/node/5986863748',
-        sellerUsername: null,
+        sellerUsername: 'Backtrack-Antwerp',
+        channel: 'discogs',
+      },
+      {
+        id: 'warrecords',
+        name: 'Warrecords Antwerpen',
+        address: 'Sint-Katelijnevest 42',
+        lat: 51.2197228,
+        lon: 4.4051036,
+        website: 'https://www.warrecords.be/',
+        osmUrl: 'https://www.openstreetmap.org/search?query=Sint-Katelijnevest%2042%2C%20Antwerpen',
+        sellerUsername: 'warrecordsantwerp',
+        channel: 'discogs',
+        specialties: ['House', 'Techno', 'Electronic'],
       },
       {
         id: 'record-collector',
         name: 'The Record Collector',
-        address: 'Historic centre',
+        address: 'Kaasrui 4',
         lat: 51.2210247,
         lon: 4.4019027,
         osmUrl: 'https://www.openstreetmap.org/node/11693640424',
-        sellerUsername: null,
+        website: 'https://www.therecordcollector.be/',
+        channel: 'website',
+      },
+      {
+        id: 'little-shop-of-hoarders',
+        name: 'Little Shop of Hoarders',
+        address: 'Lange Nieuwstraat 8',
+        lat: 51.2198542,
+        lon: 4.4056544,
+        osmUrl: 'https://www.openstreetmap.org/search?query=Lange%20Nieuwstraat%208%2C%20Antwerpen',
+        channel: 'in-store',
+      },
+      {
+        id: 'grey-vinyl-treasures',
+        name: 'Grey Vinyl Treasures',
+        address: 'Korte Nieuwstraat 6',
+        lat: 51.2204967,
+        lon: 4.4031754,
+        osmUrl: 'https://www.openstreetmap.org/search?query=Korte%20Nieuwstraat%206%2C%20Antwerpen',
+        website: 'https://greyrecords.nl/',
+        channel: 'seasonal',
+      },
+      {
+        id: 'forest-walker-records',
+        name: 'Forest Walker Records',
+        address: 'Vleminckveld 50',
+        lat: 51.2141603,
+        lon: 4.4038214,
+        osmUrl: 'https://www.openstreetmap.org/node/6436940011',
+        channel: 'in-store',
+      },
+      {
+        id: 'kalkman-records',
+        name: 'Kalkman Records & Art',
+        address: 'Sint-Jorispoort 28',
+        lat: 51.2124905,
+        lon: 4.4064010,
+        osmUrl: 'https://www.openstreetmap.org/search?query=Sint-Jorispoort%2028%2C%20Antwerpen',
+        website: 'https://kalkmanrecords.com/',
+        sellerUsername: 'KalkmanVinylRecords',
+        inventoryCount: 1121,
+        inventoryScope: 'shared',
+        channel: 'discogs',
+      },
+      {
+        id: 'morbus-gravis',
+        name: 'Morbus Gravis – Music Space',
+        address: 'Lange Kievitstraat 30',
+        lat: 51.2128517,
+        lon: 4.4188425,
+        osmUrl: 'https://www.openstreetmap.org/search?query=Lange%20Kievitstraat%2030%2C%20Antwerpen',
+        website: 'https://www.morbusgravis.be/',
+        sellerUsername: 'Morbus_Gravis',
+        inventoryCount: 0,
+        channel: 'discogs',
+        specialties: ['Experimental', 'Ambient', 'Electronic'],
+      },
+      {
+        id: 'sound-architecture',
+        name: 'Sound Architecture',
+        address: 'Simonsstraat 21',
+        lat: 51.2115069,
+        lon: 4.4218590,
+        osmUrl: 'https://www.openstreetmap.org/search?query=Simonsstraat%2021%2C%20Antwerpen',
+        website: 'https://soundarchitecture.be/',
+        sellerUsername: 'Sound_Architecture',
+        inventoryCount: 0,
+        channel: 'discogs',
+        specialties: ['House', 'Techno', 'Electronic', 'Disco'],
+      },
+      {
+        id: 'fnac-antwerpen',
+        name: 'FNAC Antwerpen',
+        address: 'Meir 66',
+        lat: 51.2176374,
+        lon: 4.4106042,
+        osmUrl: 'https://www.openstreetmap.org/search?query=Meir%2066%2C%20Antwerpen',
+        website: 'https://www.nl.fnac.be/',
+        channel: 'webshop',
+      },
+      {
+        id: 'closet-of-records',
+        name: 'Closet of Records (Het Bos)',
+        address: 'Ankerrui 5–7',
+        lat: 51.2274312,
+        lon: 4.4103553,
+        osmUrl: 'https://www.openstreetmap.org/search?query=Ankerrui%205-7%2C%20Antwerpen',
+        website: 'https://hetbos.be/',
+        channel: 'seasonal',
+      },
+      {
+        id: 'coffee-and-vinyl',
+        name: 'Coffee & Vinyl',
+        address: 'Volkstraat 45',
+        lat: 51.2103903,
+        lon: 4.3955840,
+        osmUrl: 'https://www.openstreetmap.org/node/6917721526',
+        website: 'https://www.coffeeandvinyl.com/',
+        channel: 'discogs-unmatched',
+      },
+      {
+        id: 'djingel-djangel',
+        name: 'Djingel Djangel',
+        address: 'Bordeauxstraat 7A',
+        lat: 51.2304936,
+        lon: 4.4093212,
+        osmUrl: 'https://www.openstreetmap.org/node/4922022152',
+        website: 'https://djingeldjangel.be/vinyl-vault/',
+        channel: 'webshop',
+      },
+      {
+        id: 'panoply-books-records',
+        name: 'Panoply Books & Records',
+        address: 'Wolstraat 1',
+        lat: 51.2217279,
+        lon: 4.4025643,
+        osmUrl: 'https://www.openstreetmap.org/search?query=Wolstraat%201%2C%20Antwerpen',
+        website: 'https://www.pnply.be/',
+        channel: 'website',
       },
     ],
   },
@@ -110,4 +247,3 @@ const CITY_DIG_CITIES = [
 
 if (typeof module !== 'undefined' && module.exports) module.exports = { CITY_DIG_CITIES };
 if (typeof window !== 'undefined') window.CITY_DIG_CITIES = CITY_DIG_CITIES;
-
