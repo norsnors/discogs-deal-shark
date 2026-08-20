@@ -243,11 +243,16 @@ function extractPressingSignals(item, detail = {}) {
   const text = [listing.rawTitle, listing.title, detail.name, detail.description, detail.brand, detail.color, detail.category].filter(Boolean).join(' ');
   const normalized = normalizeText(text);
   const years = [...new Set(Array.from(String(text).matchAll(/\b(19\d{2}|20\d{2})\b/g), (match) => Number(match[1])))];
+  const discogsReleaseIds = [...new Set(Array.from(
+    String(text).matchAll(/discogs\.com\/release\/(\d+)/gi),
+    (match) => String(match[1]),
+  ))];
   const colors = COLOR_TERMS.filter((term) => includesTerm(text, [term])).map(normalizeText);
   return {
     normalized,
     compact: normalized.replace(/\s+/g, ''),
     years,
+    discogsReleaseIds,
     colors,
     sizes: extractVinylSizes(text),
     reissue: includesTerm(text, REISSUE_TERMS),
@@ -295,6 +300,14 @@ function resolvePressingMatch(item, match, detail = {}, metadataById = {}, optio
     const conflicts = [];
     let score = 0;
     let catalogMatch = false;
+    if (signals.discogsReleaseIds.length) {
+      if (signals.discogsReleaseIds.includes(String(profile.releaseId))) {
+        score += 12;
+        evidence.push(`discogs-release-${profile.releaseId}`);
+      } else {
+        conflicts.push('discogs-release-conflict');
+      }
+    }
     if (signals.reissue) {
       if (profile.isReissue) { score += 4; evidence.push('reissue'); }
       else conflicts.push('reissue-conflict');
@@ -332,7 +345,7 @@ function resolvePressingMatch(item, match, detail = {}, metadataById = {}, optio
     return { pressing, metadata, profile, score, evidence, conflicts };
   });
   if (decisions.every((decision) => !decision.metadata)) {
-    return { accepted: false, reason: 'metadata-unavailable', evidence: [], signals: { years: signals.years, colors: signals.colors, sizes: signals.sizes, reissue: signals.reissue, original: signals.original, compilation: signals.compilation } };
+    return { accepted: false, reason: 'metadata-unavailable', evidence: [], signals: { years: signals.years, discogsReleaseIds: signals.discogsReleaseIds, colors: signals.colors, sizes: signals.sizes, reissue: signals.reissue, original: signals.original, compilation: signals.compilation } };
   }
   // A label name alone is too broad (many labels issued several versions). Four points means an
   // explicit version clue, a matching variant, catalogue number, or a year+label combination.
@@ -346,7 +359,7 @@ function resolvePressingMatch(item, match, detail = {}, metadataById = {}, optio
       accepted: false,
       reason: 'pressing-ambiguous',
       evidence: [],
-      signals: { years: signals.years, colors: signals.colors, sizes: signals.sizes, reissue: signals.reissue, original: signals.original, compilation: signals.compilation },
+      signals: { years: signals.years, discogsReleaseIds: signals.discogsReleaseIds, colors: signals.colors, sizes: signals.sizes, reissue: signals.reissue, original: signals.original, compilation: signals.compilation },
     };
   }
   const best = strongest[0] || null;
@@ -356,7 +369,7 @@ function resolvePressingMatch(item, match, detail = {}, metadataById = {}, optio
       accepted: false,
       reason: conflict || 'version-unverified',
       evidence: [],
-      signals: { years: signals.years, colors: signals.colors, sizes: signals.sizes, reissue: signals.reissue, original: signals.original, compilation: signals.compilation },
+      signals: { years: signals.years, discogsReleaseIds: signals.discogsReleaseIds, colors: signals.colors, sizes: signals.sizes, reissue: signals.reissue, original: signals.original, compilation: signals.compilation },
     };
   }
   if (!(best.profile.median > 0)) return { accepted: false, reason: 'pressing-median-unavailable', evidence: best.evidence };
@@ -375,7 +388,7 @@ function resolvePressingMatch(item, match, detail = {}, metadataById = {}, optio
     reference: best.profile.median,
     evidence: best.evidence,
     score: best.score,
-    signals: { years: signals.years, colors: signals.colors, sizes: signals.sizes, reissue: signals.reissue, original: signals.original, compilation: signals.compilation },
+    signals: { years: signals.years, discogsReleaseIds: signals.discogsReleaseIds, colors: signals.colors, sizes: signals.sizes, reissue: signals.reissue, original: signals.original, compilation: signals.compilation },
   };
 }
 
@@ -527,6 +540,26 @@ if (require.main === module && process.argv.includes('--selftest')) {
   assert.deepStrictEqual({ accepted: wrongSize.accepted, reason: wrongSize.reason }, { accepted: false, reason: 'format-size-conflict' }, 'a 7-inch listing cannot inherit the median of a wanted 12-inch release');
   const rightSize = resolvePressingMatch({ id: 912, title: '12 inch Air Mail - Flash In Your Mind - LMB 025' }, airMailMatch, {}, originalMeta);
   assert.strictEqual(rightSize.accepted, true, 'matching 12-inch size and catalogue number identify the wanted release');
+  const explicitDiscogsMatch = resolvePressingMatch(
+    { id: 9121, title: 'Air Mail - Flash In Your Mind' },
+    airMailMatch,
+    { description: 'Release details: https://www.discogs.com/release/10-Air-Mail-Flash-In-Your-Mind' },
+    originalMeta,
+  );
+  assert.strictEqual(explicitDiscogsMatch.accepted, true, 'an explicit Discogs release URL identifies that exact wanted pressing');
+  const torchSongIndex = buildWantIndex([{ releaseId: 127654, artist: 'Torch Song', title: 'Prepare To Energize', year: 1983 }], { 127654: { median: 8.52 } });
+  const torchSongMatch = matchCatalogItem({ id: 643460239, title: 'Torch Song - Prepare To Energize - 12 inch - 1983' }, torchSongIndex);
+  const explicitDiscogsConflict = resolvePressingMatch(
+    { id: 643460239, title: 'Torch Song - Prepare To Energize - 12 inch - 1983' },
+    torchSongMatch,
+    { description: 'Holland edition ILSA 12.4113 https://www.discogs.com/release/1596294-Torch-Song-Prepare-To-Energize' },
+    { 127654: { year: 1983, formats: [{ name: 'Vinyl', descriptions: ['12"'] }], labels: [{ name: 'IRS Records', catno: 'SP 70412' }] } },
+  );
+  assert.deepStrictEqual(
+    { accepted: explicitDiscogsConflict.accepted, reason: explicitDiscogsConflict.reason },
+    { accepted: false, reason: 'discogs-release-conflict' },
+    'a listing linked to another Discogs release cannot inherit the wanted release median',
+  );
   const compilationFalsePositive = resolvePressingMatch(
     { id: 913, title: 'Various Artists Italo Disco compilation feat. Air Mail - Flash In Your Mind - LMB 025' },
     airMailMatch,

@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const { rareGemTransition } = require('../vinted/policy');
 
-const VERSION = 1;
+const VERSION = 2;
 const SECRET_KEY = /^(?:raw|rawResponse|rawPayload|authorization|token|access[_-]?token|refresh[_-]?token|headers?|clientSecret|certId)$/i;
 
 function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
@@ -33,6 +33,7 @@ function normalize(input = {}) {
     cursor: Math.max(0, Number(value.cursor) || 0),
     seenIds: [...new Set((Array.isArray(value.seenIds) ? value.seenIds : []).map(String))].slice(-50000),
     deals: cap(value.deals, 500),
+    matches: cap(value.matches, 1000),
     gems: cap(value.gems, 250),
     availability: value.availability && typeof value.availability === 'object' && !Array.isArray(value.availability) ? value.availability : {},
     wantlist: Array.isArray(value.wantlist) ? value.wantlist.slice(0, 10000) : [],
@@ -60,9 +61,9 @@ function createEbayState(filePath) {
     return get();
   }
   function add(kind, record, options = {}) {
-    if (!['deals', 'gems'].includes(kind)) throw new Error(`Unknown eBay collection: ${kind}`);
+    if (!['deals', 'matches', 'gems'].includes(kind)) throw new Error(`Unknown eBay collection: ${kind}`);
     const clean = sanitize(record); const id = recordId(clean); if (!id) return null;
-    state[kind] = cap([clean, ...state[kind].filter((entry) => recordId(entry) !== id)], kind === 'deals' ? 500 : 250);
+    state[kind] = cap([clean, ...state[kind].filter((entry) => recordId(entry) !== id)], kind === 'matches' ? 1000 : (kind === 'deals' ? 500 : 250));
     if (options.persist !== false) write();
     return clone(clean);
   }
@@ -81,7 +82,7 @@ function createEbayState(filePath) {
     if (options.persist !== false) write();
     return { previous: clone(previous), current: clone(current), transition: rareGemTransition(previous, current) };
   }
-  return { file: target, get, update, save: (value) => { state = normalize(value); write(); return get(); }, addDeal: (r, o) => add('deals', r, o), addGem: (r, o) => add('gems', r, o), markSeen, observeAvailability };
+  return { file: target, get, update, save: (value) => { state = normalize(value); write(); return get(); }, addDeal: (r, o) => add('deals', r, o), addMatch: (r, o) => add('matches', r, o), addGem: (r, o) => add('gems', r, o), markSeen, observeAvailability };
 }
 
 module.exports = { VERSION, sanitize, normalize, createEbayState };
@@ -93,9 +94,11 @@ if (require.main === module && process.argv.includes('--selftest')) {
   assert.strictEqual(state.markSeen('one'), true);
   assert.strictEqual(state.markSeen('one'), false);
   state.addDeal({ id: 'ebay:1', rawPayload: { token: 'never' }, lowest: 10 });
+  state.addMatch({ id: 'ebay:2', alertEligible: false, lowest: 20 });
   state.observeAvailability('a', false);
   assert.strictEqual(state.observeAvailability('a', true).transition.isRareGem, true);
   const disk = fs.readFileSync(file, 'utf8');
   assert.ok(!disk.includes('never') && !disk.includes('token'));
+  assert.strictEqual(state.get().matches.length, 1);
   console.log('ebay state selftest: OK');
 }

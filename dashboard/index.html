@@ -133,7 +133,7 @@
       <div class="vinted-panel-copy">
         <div class="vinted-kicker">EBAY · OFFICIAL BROWSE API</div>
         <h3>Wantlist scanner</h3>
-        <p>Search eBay for exact Discogs pressings, compare landed cost with sold medians and open the original listing. New matches trigger desktop alerts while Deal Shark is open.</p>
+        <p>Search eBay for exact Discogs pressings, compare landed cost with sold medians and open the original listing. Only strict deals trigger desktop alerts; dashboard-only matches do not.</p>
       </div>
       <div class="vinted-panel-controls">
         <label class="switch-row vinted-switch" for="ebay-enabled">
@@ -166,7 +166,7 @@
       <div class="vinted-panel-copy">
         <div class="vinted-kicker">TRADERA · OFFICIAL REST API</div>
         <h3>Wantlist scanner</h3>
-        <p>Search fixed-price Tradera listings, verify the exact Discogs pressing and compare the converted landed-cost estimate with sold medians. New matches trigger desktop alerts while Deal Shark is open.</p>
+        <p>Search fixed-price Tradera listings, verify the exact Discogs pressing and compare the converted landed-cost estimate with sold medians. Only strict deals trigger desktop alerts; dashboard-only matches do not.</p>
       </div>
       <div class="vinted-panel-controls">
         <label class="switch-row vinted-switch" for="tradera-enabled">
@@ -210,10 +210,10 @@
         <input type="search" id="search" placeholder="Search artist or release" />
       </label>
       <div class="rule-summary" id="rule-summary" aria-label="Current deal rules">
-        <span id="summary-discount">50%+ off</span>
-        <span id="summary-value">€25+ value</span>
-        <span id="summary-sort">Best first</span>
+        <span id="summary-discount">25%+ off</span>
+        <span id="summary-value">€10+ value</span>
       </div>
+      <label class="sort-control" id="sort-control" for="sortBy"><span>Sort</span><select id="sortBy"><option value="best">Best overall</option><option value="discount">Biggest % off</option><option value="total">Lowest checkout price</option><option value="savings">Most euros saved</option><option value="newest">Newest listing</option></select></label>
       <button id="btn-filter-toggle" class="filter-toggle" type="button" aria-expanded="false" aria-controls="filter-panel">
         <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         <span>Fine-tune</span><span id="filter-active-count" class="filter-count hidden"></span>
@@ -295,15 +295,20 @@
 
     <section id="filter-panel" class="filters hidden" aria-label="Deal filters">
       <div class="filter-panel-head">
-        <div><strong>Fine-tune your shortlist</strong><span>These only change what you see; scanning and alerts keep working normally.</span></div>
+        <div><strong>Fine-tune your dashboard</strong><span>Dashboard only. This never lowers the strict eligibility boundary used by email or desktop alerts.</span></div>
         <button id="btn-filter-reset" class="text-button" type="button">Reset</button>
       </div>
+      <div class="filter-presets" aria-label="Dashboard filter presets">
+        <span>Quick view</span>
+        <button class="filter-preset" type="button" data-min-value="0" data-min-discount="10">Browse wider</button>
+        <button class="filter-preset" type="button" data-min-value="10" data-min-discount="25">Balanced</button>
+        <button class="filter-preset" type="button" data-min-value="25" data-min-discount="50">Alert line</button>
+      </div>
       <div class="filter-grid">
-        <label class="filter-field"><span class="filter-label">Minimum market value <b id="minValueVal">€25+</b></span><input type="range" id="minValue" min="0" max="100" step="5" value="25" /><small>Skip low-value releases</small></label>
-        <label class="filter-field"><span class="filter-label">Minimum discount <b id="minDiscountVal">50%</b></span><input type="range" id="minDiscount" min="40" max="95" step="5" value="50" /><small>Compared with the best reference</small></label>
+        <label class="filter-field"><span class="filter-label">Minimum market value <b id="minValueVal">€10+</b></span><input type="range" id="minValue" min="0" max="100" step="5" value="10" /><small>Skip low-value releases on this screen</small></label>
+        <label class="filter-field"><span class="filter-label">Minimum discount <b id="minDiscountVal">25%</b></span><input type="range" id="minDiscount" min="0" max="95" step="5" value="25" /><small>Compared with the pressing reference</small></label>
         <label class="filter-field"><span class="filter-label">Maximum total <b id="maxTotalVal">Any</b></span><input type="range" id="maxTotal" min="0" max="150" step="5" value="0" /><small>Item plus shipping</small></label>
         <label class="filter-field"><span class="filter-label">Shipping estimate <b id="shipEstVal">€5</b></span><input type="range" id="shipEst" min="0" max="25" step="1" value="5" /><small>Used when real shipping is unknown</small></label>
-        <label class="filter-field select-field"><span class="filter-label">Order results</span><select id="sortBy"><option value="best">Best opportunities first</option><option value="discount">Biggest discount</option><option value="total">Lowest total</option><option value="savings">Most money saved</option><option value="newest">Newest first</option></select><small>“Best” balances discount, savings and confidence</small></label>
       </div>
       <div class="filter-switches">
         <label class="switch-row" title="Only show copies that look VG+ or better. Cloud deals without a verified grade may be hidden."><input type="checkbox" id="vgPlusOnly" /><span></span><b>VG+ or better only</b></label>

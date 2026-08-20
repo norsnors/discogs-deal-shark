@@ -24,7 +24,7 @@ const preserved = [
   'tab-deals', 'tab-gems', 'tab-scout', 'tab-city', 'btn-scan-all', 'btn-fullscan', 'btn-scan-cancel', 'btn-settings', 'btn-telegram',
   'scan-all-status', 'scan-all-discogs', 'scan-all-vinted', 'scan-all-ebay', 'scan-all-tradera',
   'svc-badge', 'pill-sweep', 'pill-cron', 'push-badge', 'pill-wantlist', 'pill-deals',
-  'search', 'minValue', 'minDiscount', 'maxTotal', 'shipEst', 'sortBy', 'vgPlusOnly',
+  'search', 'sort-control', 'minValue', 'minDiscount', 'maxTotal', 'shipEst', 'sortBy', 'vgPlusOnly',
   'freshOnly', 'showHidden', 'showNearMiss', 'settings-modal', 'cloud-modal', 'telegram-modal',
   'wizard-modal', 'scout-panel', 'scout-form', 'scout-field', 'scout-query', 'scout-min-value',
   'scout-limit', 'scout-run', 'scout-cancel', 'deals', 'empty',
@@ -42,6 +42,11 @@ const preserved = [
 for (const id of preserved) assert.strictEqual(idCounts.get(id), 1, `preserved feature #${id} missing`);
 
 assert.ok(/id="filter-panel"[^>]*class="[^"]*hidden/.test(html), 'advanced filters start collapsed');
+assert.strictEqual((html.match(/class="filter-preset"/g) || []).length, 3, 'dashboard exposes three understandable filter presets');
+assert.ok(/strict eligibility boundary used by email or desktop alerts/.test(html), 'filter drawer makes the strict alert boundary explicit');
+assert.ok(/id="sort-control"/.test(html) && /Lowest checkout price/.test(html), 'sorting stays visible and uses plain-language options');
+assert.ok(/FILTER_STATE_KEY = 'ddw-filter-state-v3'/.test(renderer) && /minValue: '10', minDiscount: '25'/.test(renderer), 'new balanced dashboard defaults are versioned');
+assert.ok(/marketplaceDashboardRows\(next\.deals, next\.matches\)/.test(renderer) && /dashboard match · no alert/.test(renderer), 'official marketplace dashboard matches are visibly separate from alert deals');
 assert.ok(/id="tab-deals"/.test(html) && /id="tab-gems"/.test(html) && /id="tab-scout"/.test(html) && /id="tab-city"/.test(html), 'Deals, Rare gems, Scout and City Dig remain primary tabs');
 assert.ok(/id="platform-select"/.test(html) && /value="discogs"/.test(html) && /value="vinted"/.test(html) && /value="ebay"/.test(html) && /value="tradera"/.test(html), 'marketplace switch offers Discogs, Vinted, eBay and Tradera');
 const styles = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');

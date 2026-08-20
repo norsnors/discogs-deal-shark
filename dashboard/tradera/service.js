@@ -238,6 +238,7 @@ function createTraderaService(options = {}) {
       cursor: snapshot.cursor || 0,
       progress,
       fx: lastFx,
+      lastRunStats: snapshot.health && snapshot.health.lastRunStats || null,
       error: lastError,
       message: !hasCredentials ? 'Add your Tradera developer App ID and App Key to connect the official API.'
         : (lastPollAt ? 'Official Tradera REST v4 · fixed-price listings · pressing-matched against your Discogs wantlist.' : 'Tradera API is configured and ready.'),
@@ -245,7 +246,13 @@ function createTraderaService(options = {}) {
   }
   function snapshot(extra = {}) {
     const current = state.get(); const cutoff = now() - LIVE_TTL_MS;
-    return { status: publicStatus(), deals: current.deals.filter((record) => Number(record.observedAt || record.ts || 0) >= cutoff), gems: { ts: current.updatedAt || null, gems: current.gems, zeroWatch: zeroWatch(current) }, ...extra };
+    return {
+      status: publicStatus(),
+      deals: current.deals.filter((record) => Number(record.observedAt || record.ts || 0) >= cutoff),
+      matches: current.matches.filter((record) => Number(record.observedAt || record.ts || 0) >= cutoff),
+      gems: { ts: current.updatedAt || null, gems: current.gems, zeroWatch: zeroWatch(current) },
+      ...extra,
+    };
   }
   function publish(extra) { const value = snapshot(extra); try { emit(value); } catch { /* renderer may be closed */ } return value; }
   async function metadataFor(group, config) {
@@ -282,6 +289,8 @@ function createTraderaService(options = {}) {
       reference: evaluation.reference,
       referenceSource: 'sold-median',
       discount: evaluation.discount,
+      alertEligible: !!evaluation.isDeal,
+      dashboardOnly: !evaluation.isDeal,
       numForSale: 1,
       matchScore: resolved.score,
       pressingVerified: true,
@@ -330,8 +339,9 @@ function createTraderaService(options = {}) {
       const evaluation = { reference, discount, shippingEstimate, isDeal: reference >= minReference && total <= reference * (1 - minDiscount) };
       const record = recordFor(listing, resolved, evaluation, fx, now());
       accepted.push(record);
-      const fresh = state.markSeen(record.id, { persist: false });
+      state.addMatch(record, { persist: false });
       if (evaluation.isDeal) {
+        const fresh = state.markSeen(record.id, { persist: false });
         state.addDeal(record, { persist: false }); runStats.dealsFound += 1;
         if (fresh) runStats.newDeals.push(record);
       }
@@ -411,6 +421,7 @@ module.exports = {
 if (require.main === module && process.argv.includes('--selftest')) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deal-shark-tradera-service-'));
   let settings = { traderaEnabled: false, traderaPollMinutes: 30 };
+  let config = { username: 'tester', token: 'discogs', currency: 'EUR', minDiscount: 0.5, minReference: 100, shippingEstimate: 5 };
   const summary = {
     id: 123, shortDescription: 'Macho - I’m A Man original 12 inch', buyItNowPrice: 200,
     itemUrl: 'https://www.tradera.com/item/123', endDate: '2026-12-31T12:00:00Z',
@@ -422,7 +433,7 @@ if (require.main === module && process.argv.includes('--selftest')) {
   };
   const service = createTraderaService({
     stateFile: path.join(dir, 'state.json'), readSettings: () => settings, writeSettings: (patch) => { settings = { ...settings, ...patch }; },
-    readConfig: () => ({ username: 'tester', token: 'discogs', currency: 'EUR', minDiscount: 0.5, minReference: 25, shippingEstimate: 5 }),
+    readConfig: () => config,
     loadWantlist: async () => [{ id: 1, artist: 'Macho', title: 'I’m A Man', year: 1978 }],
     loadMedians: async () => ({ 1: { median: 80 } }),
     loadReleaseMetadata: async () => ({ year: 1978, title: 'I’m A Man', artist: 'Macho', formats: [{ name: 'Vinyl', descriptions: ['12"', 'Original'] }], labels: [{ name: 'Goody Music', catno: 'GO 123' }] }),
@@ -432,8 +443,16 @@ if (require.main === module && process.argv.includes('--selftest')) {
     now: () => Date.parse('2026-08-20T12:00:00Z'),
   });
   (async () => {
+    const browseResult = await service.runOnce({ all: true });
+    assert.strictEqual(browseResult.matches.length, 1, 'safe matches remain available to dashboard filters');
+    assert.strictEqual(browseResult.matches[0].alertEligible, false);
+    assert.strictEqual(browseResult.deals.length, 0, 'dashboard-only matches never cross the strict alert boundary');
+    assert.strictEqual(browseResult.newDeals.length, 0);
+    config = { ...config, minReference: 25 };
     const result = await service.runOnce({ all: true });
     assert.strictEqual(result.deals.length, 1);
+    assert.strictEqual(result.matches.length, 1);
+    assert.strictEqual(result.newDeals.length, 1, 'a previously browsed listing alerts when it later becomes strictly eligible');
     assert.strictEqual(result.deals[0].platform, 'tradera');
     assert.strictEqual(result.deals[0].nativeItemPrice, 200);
     assert.strictEqual(result.deals[0].currency, 'EUR');

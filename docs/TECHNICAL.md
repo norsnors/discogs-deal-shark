@@ -248,11 +248,17 @@ source has its own progress state. Missing credentials and already-running sourc
 skipped; a failure in one adapter never cancels the other scans. The secondary header action still
 scans only the marketplace selected in the switcher.
 
-**Alert boundary:** eBay, Tradera and Vinted are local desktop integrations. New matches trigger
+**Alert boundary:** eBay, Tradera and Vinted are local desktop integrations. New strictly eligible deals trigger
 desktop notifications while Deal Shark is open, but they do **not** currently use the cloud email
 watcher. The existing 24/7 Resend/Gmail email and Telegram delivery path is Discogs-only. Adding
 marketplace email requires either a local mail credential (alerts only while the app runs) or moving
 those API scans into the cloud watcher with separate encrypted credentials and rate budgets.
+
+Dashboard filters are deliberately broader than that alert boundary. eBay and Tradera persist every
+conservatively pressing-matched listing in a dashboard-only `matches` collection, while only records
+that pass the configured value and discount rules enter `deals` or `newDeals`. Dashboard-only cards
+are labelled **dashboard match · no alert**. The visible sort menu, the Browse wider/Balanced/Alert
+line presets and the sliders only change the screen; they cannot lower email or desktop-alert rules.
 
 ### Scan wantlist (local full sweep, on demand)
 
@@ -305,7 +311,7 @@ the clearly labelled local estimate — with that pressing's real Discogs sold m
 Background watch rotates through a small wantlist batch at the chosen interval; **Scan eBay now**
 checks the whole wantlist. The adapter stops before 4,800 requests in a UTC day, leaving headroom below
 eBay's normal Browse allocation. It is read-only: the app opens the original eBay URL and never bids,
-buys, sends offers or messages. New matches use desktop notifications, not cloud email. Sandbox credentials can test OAuth, but real production inventory
+buys, sends offers or messages. New strictly eligible deals use desktop notifications, not cloud email. Sandbox credentials can test OAuth, but real production inventory
 requires eBay Buy API production approval.
 
 ### Tradera (official REST API v4)
@@ -332,7 +338,7 @@ Background watch rotates through a small wantlist batch at the chosen interval; 
 checks the whole wantlist. The adapter stops before 9,500 aggregate requests per UTC day, below
 Tradera's documented default limit of 10,000 calls per method per 24 hours. If the ECB feed is briefly
 unavailable, the last successful rate may be reused for at most seven days and is labelled cached.
-New matches use desktop notifications, not cloud email.
+New strictly eligible deals use desktop notifications, not cloud email.
 
 ## Desktop releases
 

@@ -194,9 +194,9 @@ const shipVal = () => parseFloat($('shipEst').value) || 0;
 
 // Daily use stays intentionally simple. The full filter engine still exists, but lives behind one
 // "Fine-tune" button and remembers the user's choices between app launches.
-const FILTER_STATE_KEY = 'ddw-filter-state-v2';
+const FILTER_STATE_KEY = 'ddw-filter-state-v3';
 const FILTER_DEFAULTS = {
-  minValue: '25', minDiscount: '50', maxTotal: '0', shipEst: '5', sortBy: 'best',
+  minValue: '10', minDiscount: '25', maxTotal: '0', shipEst: '5', sortBy: 'best',
   vgPlusOnly: false, freshOnly: false, showHidden: false, showNearMiss: false,
 };
 const FILTER_IDS = Object.keys(FILTER_DEFAULTS);
@@ -239,8 +239,11 @@ function updateFilterUi() {
   $('shipEstVal').textContent = `€${shipping}`;
   $('summary-discount').textContent = `${minDiscount}%+ off`;
   $('summary-value').textContent = minValue > 0 ? `€${minValue}+ value` : 'Any value';
-  const sortLabels = { best: 'Best first', discount: 'Biggest discount', total: 'Lowest total', savings: 'Most saved', newest: 'Newest first' };
-  $('summary-sort').textContent = sortLabels[$('sortBy').value] || 'Best first';
+  document.querySelectorAll('.filter-preset').forEach((button) => {
+    const active = Number(button.dataset.minValue) === minValue && Number(button.dataset.minDiscount) === minDiscount;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
 
   const state = currentFilterState();
   const changed = FILTER_IDS.filter((id) => String(state[id]) !== String(FILTER_DEFAULTS[id])).length;
@@ -292,6 +295,12 @@ function updateViewCopy() {
     $('view-intro').textContent = city ? 'See every mapped shop for free, then load the first 100 vinyl listings from every connected Discogs seller in the city.' : (scout ? 'Search Discogs by style or genre, filter on estimated VG+ value, and add promising pressings straight to your wantlist.' : (gems ? 'First copies after a release was unavailable — price is context, availability is the signal.' : 'Verified copies ranked by total value, so the strongest opportunities stay on top.'));
   }
   $('search').placeholder = city ? 'Search loaded store inventory' : (gems ? 'Search rare records' : 'Search artist or release');
+}
+
+function applyFilterPreset(button) {
+  $('minValue').value = String(button.dataset.minValue || '0');
+  $('minDiscount').value = String(button.dataset.minDiscount || '0');
+  onFilterChanged();
 }
 
 function until(ts) {
@@ -525,7 +534,10 @@ function card(d) {
   // The alerted price is gone from the marketplace — state the fact, no guessing about why.
   const gone = d._gone
     ? `<span class="tag gone" title="The cloud watcher's latest check shows this price is no longer on the marketplace">⌛ no longer listed — ${d.current && d.current.lowest != null ? `cheapest is now ${money(d.current.lowest, d.currency)}` : 'no copies for sale'}</span>` : '';
-  return `<article class="card${d.freshListing ? ' is-fresh' : ''}${d.conditionConfirmed ? ' is-verified' : ''}${isHidden ? ' is-hidden' : ''}${d._gone ? ' is-gone' : ''}">
+  const dashboardOnly = d.dashboardOnly || d.alertEligible === false
+    ? '<span class="tag dashboard-only" title="Safe pressing match shown by your dashboard filters. It does not meet the strict alert boundary.">dashboard match · no alert</span>'
+    : '';
+  return `<article class="card${d.freshListing ? ' is-fresh' : ''}${d.conditionConfirmed ? ' is-verified' : ''}${isHidden ? ' is-hidden' : ''}${d._gone ? ' is-gone' : ''}${dashboardOnly ? ' is-dashboard-match' : ''}">
     ${dismissBtn}
     <span class="when">${d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera' ? ago(d.ts) : (viewMode === 'scan' ? 'live' : ago(d.ts))}</span>
     ${thumb}
@@ -543,7 +555,7 @@ function card(d) {
       ${priceHistory}
       ${worn}
       ${alt}
-      <div class="meta">${gone}${fresh}${conditionChip(d)}${ships}${historyTags}</div>
+      <div class="meta">${gone}${dashboardOnly}${fresh}${conditionChip(d)}${ships}${historyTags}</div>
       <button class="buy" data-url="${esc(d.url)}">${buyLabel}</button>
     </div>
   </article>`;
@@ -1360,6 +1372,30 @@ async function refreshVintedSnapshot() {
   } finally { vintedRefreshBusy = false; }
 }
 
+function marketplaceDashboardRows(strictDeals, matches) {
+  const matchRows = Array.isArray(matches) ? matches : [];
+  const currentMatchById = new Map(matchRows.map((record) => [String(record.id || record.listingId || ''), record]));
+  const dealRows = (Array.isArray(strictDeals) ? strictDeals : [])
+    .filter((record) => {
+      const current = currentMatchById.get(String(record.id || record.listingId || ''));
+      return !current || (current.alertEligible !== false && !current.dashboardOnly);
+    })
+    .map((record) => ({ ...record, alertEligible: true, dashboardOnly: false }));
+  const strictIds = new Set(dealRows.map((record) => String(record.id || record.listingId || '')));
+  const browseRows = matchRows
+    .filter((record) => !strictIds.has(String(record.id || record.listingId || '')))
+    .map((record) => ({ ...record, alertEligible: false, dashboardOnly: true }));
+  return [...dealRows, ...browseRows];
+}
+
+function marketplaceScanSummary(stats) {
+  if (!stats || typeof stats !== 'object') return '';
+  const checked = Math.max(0, Number(stats.checked) || 0);
+  const matches = Math.max(0, Number(stats.listingsFound) || 0);
+  const alerts = Math.max(0, Number(stats.dealsFound) || 0);
+  return `Last scan: ${checked} wantlist search${checked === 1 ? '' : 'es'} · ${matches} safe pressing match${matches === 1 ? '' : 'es'} · ${alerts} alert deal${alerts === 1 ? '' : 's'}.`;
+}
+
 function normalizeEbaySnapshot(value) {
   const input = value && typeof value === 'object' ? value : {};
   const status = input.status && typeof input.status === 'object' ? input.status : {};
@@ -1377,10 +1413,12 @@ function normalizeEbaySnapshot(value) {
       dailyLimit: Math.max(1, Number(status.dailyLimit) || 4800),
       targetCount: Math.max(0, Number(status.targetCount) || 0),
       progress,
+      lastRunStats: status.lastRunStats && typeof status.lastRunStats === 'object' ? status.lastRunStats : null,
       message: status.message || null,
       error: status.error || null,
     },
     deals: Array.isArray(input.deals) ? input.deals : [],
+    matches: Array.isArray(input.matches) ? input.matches : [],
     gems: normalizeGems(input.gems),
   };
 }
@@ -1396,7 +1434,8 @@ function renderEbayStatus() {
   $('ebay-next-scan').textContent = s.enabled && s.nextPollAt ? until(s.nextPollAt) : '—';
   $('ebay-api-calls').textContent = `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 4800).toLocaleString()}`;
   const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
-  $('ebay-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official Browse API ready.' : 'Add your eBay developer credentials to connect the official API.')}`;
+  const completed = !s.running ? marketplaceScanSummary(s.lastRunStats) : '';
+  $('ebay-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official Browse API ready.' : 'Add your eBay developer credentials to connect the official API.')}${completed ? ` ${completed}` : ''}`;
   $('ebay-scan-now').disabled = !!s.running || !s.configured || scanAllRunning;
   $('ebay-enabled').disabled = !s.configured;
 }
@@ -1412,7 +1451,7 @@ function notifyEbay(items, kind = 'deal') {
 function applyEbaySnapshot(value, { notify = false } = {}) {
   const next = normalizeEbaySnapshot(value);
   ebayStatus = next.status;
-  platformViews.ebay = { deals: next.deals, nearMisses: [], gems: next.gems, viewMode: 'ebay', scannedOnce: !!next.status.lastPollAt };
+  platformViews.ebay = { deals: marketplaceDashboardRows(next.deals, next.matches), nearMisses: [], gems: next.gems, viewMode: 'ebay', scannedOnce: !!next.status.lastPollAt };
   if (activePlatform === 'ebay') restorePlatformView('ebay');
   renderEbayStatus(); updateGemsBadge();
   syncMarketplaceAllScan('ebay', next.status);
@@ -1445,11 +1484,13 @@ function normalizeTraderaSnapshot(value) {
       dailyLimit: Math.max(1, Number(status.dailyLimit) || 9500),
       targetCount: Math.max(0, Number(status.targetCount) || 0),
       progress,
+      lastRunStats: status.lastRunStats && typeof status.lastRunStats === 'object' ? status.lastRunStats : null,
       fx: status.fx && typeof status.fx === 'object' ? status.fx : null,
       message: status.message || null,
       error: status.error || null,
     },
     deals: Array.isArray(input.deals) ? input.deals : [],
+    matches: Array.isArray(input.matches) ? input.matches : [],
     gems: normalizeGems(input.gems),
   };
 }
@@ -1466,7 +1507,8 @@ function renderTraderaStatus() {
   $('tradera-api-calls').textContent = `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 9500).toLocaleString()}`;
   const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
   const fx = s.fx && Number(s.fx.rate) > 0 ? ` SEK→${s.fx.to} via ${s.fx.source === 'identity' ? 'identity' : 'ECB'}${s.fx.stale ? ' (cached)' : ''}.` : '';
-  $('tradera-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official REST v4 ready.' : 'Add your Tradera developer credentials to connect the official API.')}${fx}`;
+  const completed = !s.running ? marketplaceScanSummary(s.lastRunStats) : '';
+  $('tradera-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official REST v4 ready.' : 'Add your Tradera developer credentials to connect the official API.')}${fx}${completed ? ` ${completed}` : ''}`;
   $('tradera-scan-now').disabled = !!s.running || !s.configured || scanAllRunning;
   $('tradera-enabled').disabled = !s.configured;
 }
@@ -1482,7 +1524,7 @@ function notifyTradera(items, kind = 'deal') {
 function applyTraderaSnapshot(value, { notify = false } = {}) {
   const next = normalizeTraderaSnapshot(value);
   traderaStatus = next.status;
-  platformViews.tradera = { deals: next.deals, nearMisses: [], gems: next.gems, viewMode: 'tradera', scannedOnce: !!next.status.lastPollAt };
+  platformViews.tradera = { deals: marketplaceDashboardRows(next.deals, next.matches), nearMisses: [], gems: next.gems, viewMode: 'tradera', scannedOnce: !!next.status.lastPollAt };
   if (activePlatform === 'tradera') restorePlatformView('tradera');
   renderTraderaStatus(); updateGemsBadge();
   syncMarketplaceAllScan('tradera', next.status);
@@ -1624,25 +1666,33 @@ function render() {
   }, 0);
   const hiddenNote = hiddenCount ? ` · ${hiddenCount} hidden` : '';
   const vgNote = vgHidden ? ` · ${vgHidden} hidden by “VG+ only”` : '';
-  $('pill-deals').textContent = `${allDeals.length} deal${allDeals.length === 1 ? '' : 's'}`;
+  const officialMarketplace = activePlatform === 'ebay' || activePlatform === 'tradera';
+  const alertDealCount = allDeals.filter((deal) => deal.alertEligible !== false).length;
+  const dashboardMatchCount = Math.max(0, allDeals.length - alertDealCount);
+  $('pill-deals').textContent = officialMarketplace
+    ? `${alertDealCount} alert deal${alertDealCount === 1 ? '' : 's'}${dashboardMatchCount ? ` · ${dashboardMatchCount} dashboard` : ''}`
+    : `${allDeals.length} deal${allDeals.length === 1 ? '' : 's'}`;
   const verifyNote = activePlatform === 'discogs' && verifyInfo.running ? ` · ✓ checking listings ${Math.min(verifyInfo.done + 1, verifyInfo.total)}/${verifyInfo.total}…` : '';
   const sourceNote = activePlatform === 'vinted' ? ' · Vinted sniper' : (activePlatform === 'ebay' ? ' · eBay Browse API' : (activePlatform === 'tradera' ? ' · Tradera REST v4' : (viewMode === 'scan' ? ' · live scan' : '')));
-  $('resultCount').textContent = (deals.length || verifyNote) ? `${deals.length} of ${allDeals.length}${hiddenNote}${vgNote}${sourceNote}${verifyNote}` : '';
+  const marketplaceBreakdown = officialMarketplace ? ` · ${alertDealCount} alert eligible` : '';
+  $('resultCount').textContent = (deals.length || verifyNote) ? `${deals.length} shown of ${allDeals.length}${marketplaceBreakdown}${hiddenNote}${vgNote}${sourceNote}${verifyNote}` : '';
   if (!deals.length && !misses.length && !goneDeals.length) {
     wrap.innerHTML = '';
     empty.classList.remove('hidden');
     empty.textContent = allDeals.length
       ? (vgHidden
           ? `${vgHidden} deal${vgHidden === 1 ? '' : 's'} hidden by “VG+ only” — untick it to see ${vgHidden === 1 ? 'it' : 'them'} (cloud/email deals can’t be condition-verified).`
-          : 'No deals match your filters — loosen the sliders.')
+          : (officialMarketplace
+              ? `${allDeals.length} safe dashboard match${allDeals.length === 1 ? '' : 'es'}, but none pass these dashboard filters. Choose “Browse wider” or loosen the sliders; the strict alert boundary stays unchanged.`
+              : 'No deals match your filters — loosen the sliders.'))
       : (activePlatform === 'vinted'
           ? (vintedStatus.running
               ? 'Sniper is checking Vinted. No wantlist match meets your discount rules yet.'
               : 'No Vinted deals yet. Enable the background sniper or scan Vinted now.')
           : (activePlatform === 'ebay'
-              ? (ebayStatus.running ? 'The official eBay API is scanning your wantlist.' : (ebayStatus.configured ? 'No eBay deals yet. Run a scan or enable background watch.' : 'Configure your eBay App ID and Cert ID to start.'))
+              ? (ebayStatus.running ? 'The official eBay API is scanning your wantlist.' : (ebayStatus.configured ? (marketplaceScanSummary(ebayStatus.lastRunStats) || 'No safe eBay pressing matches yet. Run a scan or enable background watch.') : 'Configure your eBay App ID and Cert ID to start.'))
               : (activePlatform === 'tradera'
-                  ? (traderaStatus.running ? 'The official Tradera API is scanning your wantlist.' : (traderaStatus.configured ? 'No fixed-price Tradera deals yet. Run a scan or enable background watch.' : 'Configure your Tradera App ID and App Key to start.'))
+                  ? (traderaStatus.running ? 'The official Tradera API is scanning your wantlist.' : (traderaStatus.configured ? (marketplaceScanSummary(traderaStatus.lastRunStats) || 'No safe fixed-price Tradera pressing matches yet. Run a scan or enable background watch.') : 'Configure your Tradera App ID and App Key to start.'))
                   : (viewMode === 'scan'
           ? (scannedOnce
               ? 'Scan finished — no confirmed VG+ copies meet your discount threshold right now.'
@@ -2646,7 +2696,7 @@ function setTelegramBadge(connected) {
 // Decide what to show on launch: the first-run wizard if there are no Discogs creds, otherwise the
 // configured deal source ('scan' by default).
 async function boot() {
-  if (!hasApi) { refresh(); return; }
+  if (!hasApi) { await setPlatform(activePlatform); refresh(); return; }
   let cfg = null; try { cfg = await window.api.getConfig(); } catch { cfg = null; }
   if (!cfg || !cfg.hasToken || !cfg.username) {
     viewMode = 'scan';
@@ -2821,6 +2871,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('minDiscount').addEventListener('input', onFilterChanged);
   $('maxTotal').addEventListener('input', onFilterChanged);
   $('shipEst').addEventListener('input', onFilterChanged);
+  document.querySelectorAll('.filter-preset').forEach((button) => button.addEventListener('click', () => applyFilterPreset(button)));
 
   if (hasApi) window.api.onScrapeProgress(onScanProgress);
   if (hasApi && window.api.onScanAllUpdate) window.api.onScanAllUpdate(onAllScanUpdate);
