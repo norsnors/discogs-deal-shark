@@ -109,6 +109,10 @@ let ebayStatus = { enabled: false, configured: false, running: false, health: 's
 let ebayRefreshBusy = false;
 let traderaStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 9500, message: null, progress: null, fx: null };
 let traderaRefreshBusy = false;
+const ALL_SCAN_LABELS = { discogs: 'Discogs', vinted: 'Vinted', ebay: 'eBay', tradera: 'Tradera' };
+let scanAllRunning = false;
+let scanAllSources = Object.fromEntries(Object.keys(ALL_SCAN_LABELS).map((source) => [source, { state: 'queued' }]));
+let scanAllCompletionTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const openUrl = (url) => { if (!url) return; if (hasApi) window.api.openExternal(url); else window.open(url, '_blank'); };
@@ -860,6 +864,7 @@ function setScoutUI(on) {
   for (const id of ['scout-field', 'scout-query', 'scout-min-value', 'scout-limit', 'scout-run']) $(id).disabled = on;
   $('scout-run').textContent = on ? 'Scouting…' : 'Start scouting';
   $('scout-progress').classList.toggle('hidden', !on);
+  $('btn-scan-all').disabled = on || scanning || cityDigging;
   $('btn-fullscan').disabled = on || scanning || cityDigging;
   $('city-run').disabled = on || cityDigging;
   if (on) setServiceBadge(lastHealth); else refreshHealth();
@@ -1191,6 +1196,7 @@ function setCityDigUI(on) {
   $('city-run').textContent = on ? 'Loading every Discogs store…' : cityRunIdleLabel();
   document.querySelectorAll('.city-store input').forEach((input) => { input.disabled = true; });
   document.querySelectorAll('#city-taxonomies input').forEach((input) => { input.disabled = on; });
+  $('btn-scan-all').disabled = on || scanning || scouting;
   $('btn-fullscan').disabled = on || scanning || scouting;
 }
 
@@ -1308,7 +1314,7 @@ function renderVintedStatus() {
   const requests = `${Number(s.requestsLastHour) || 0} request${Number(s.requestsLastHour) === 1 ? '' : 's'} this session (last-hour window)`;
   $('vinted-status-message').textContent = s.error
     || (s.message ? `${s.message} ${requests}.` : (s.enabled ? `Sniper armed · ${requests}. Deep Hunt checks older matches separately.` : 'Enable the sniper when you are ready to watch new listings.'));
-  $('vinted-scan-now').disabled = !!s.running;
+  $('vinted-scan-now').disabled = !!s.running || scanAllRunning;
 }
 
 function notifyVinted(items, kind = 'deal') {
@@ -1335,6 +1341,7 @@ function applyVintedSnapshot(value, { notify = false } = {}) {
   platformViews.vinted.scannedOnce = !!next.status.lastPollAt;
   if (activePlatform === 'vinted') restorePlatformView('vinted');
   renderVintedStatus();
+  syncMarketplaceAllScan('vinted', next.status);
   updateGemsBadge();
   if (activePlatform === 'vinted') render();
   if (notify && value) {
@@ -1390,7 +1397,7 @@ function renderEbayStatus() {
   $('ebay-api-calls').textContent = `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 4800).toLocaleString()}`;
   const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
   $('ebay-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official Browse API ready.' : 'Add your eBay developer credentials to connect the official API.')}`;
-  $('ebay-scan-now').disabled = !!s.running || !s.configured;
+  $('ebay-scan-now').disabled = !!s.running || !s.configured || scanAllRunning;
   $('ebay-enabled').disabled = !s.configured;
 }
 
@@ -1408,6 +1415,7 @@ function applyEbaySnapshot(value, { notify = false } = {}) {
   platformViews.ebay = { deals: next.deals, nearMisses: [], gems: next.gems, viewMode: 'ebay', scannedOnce: !!next.status.lastPollAt };
   if (activePlatform === 'ebay') restorePlatformView('ebay');
   renderEbayStatus(); updateGemsBadge();
+  syncMarketplaceAllScan('ebay', next.status);
   if (activePlatform === 'ebay') render();
   if (notify && value) { notifyEbay(value.newDeals, 'deal'); notifyEbay(value.newGems, 'gem'); }
 }
@@ -1459,7 +1467,7 @@ function renderTraderaStatus() {
   const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
   const fx = s.fx && Number(s.fx.rate) > 0 ? ` SEK→${s.fx.to} via ${s.fx.source === 'identity' ? 'identity' : 'ECB'}${s.fx.stale ? ' (cached)' : ''}.` : '';
   $('tradera-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official REST v4 ready.' : 'Add your Tradera developer credentials to connect the official API.')}${fx}`;
-  $('tradera-scan-now').disabled = !!s.running || !s.configured;
+  $('tradera-scan-now').disabled = !!s.running || !s.configured || scanAllRunning;
   $('tradera-enabled').disabled = !s.configured;
 }
 
@@ -1477,6 +1485,7 @@ function applyTraderaSnapshot(value, { notify = false } = {}) {
   platformViews.tradera = { deals: next.deals, nearMisses: [], gems: next.gems, viewMode: 'tradera', scannedOnce: !!next.status.lastPollAt };
   if (activePlatform === 'tradera') restorePlatformView('tradera');
   renderTraderaStatus(); updateGemsBadge();
+  syncMarketplaceAllScan('tradera', next.status);
   if (activePlatform === 'tradera') render();
   if (notify && value) { notifyTradera(value.newDeals, 'deal'); notifyTradera(value.newGems, 'gem'); }
 }
@@ -1508,7 +1517,7 @@ async function setPlatform(platform) {
   $('vinted-panel').classList.toggle('hidden', activePlatform !== 'vinted');
   $('ebay-panel').classList.toggle('hidden', activePlatform !== 'ebay');
   $('tradera-panel').classList.toggle('hidden', activePlatform !== 'tradera');
-  $('btn-fullscan').querySelector('span').textContent = activePlatform === 'vinted' ? 'Scan Vinted' : (activePlatform === 'ebay' ? 'Scan eBay' : (activePlatform === 'tradera' ? 'Scan Tradera' : 'Scan wantlist'));
+  $('btn-fullscan').querySelector('span').textContent = `${ALL_SCAN_LABELS[activePlatform]} only`;
   $('btn-fullscan').title = activePlatform === 'vinted' ? 'Check the Vinted newest feed now'
     : (activePlatform === 'ebay' ? 'Search the official eBay Browse API for every wantlist pressing' : (activePlatform === 'tradera' ? 'Search the official Tradera REST API for every wantlist pressing' : 'Scan the full wantlist with real condition, shipping and fresh sold medians'));
   $('vgPlusOnly').closest('.switch-row').classList.toggle('hidden', activePlatform !== 'discogs');
@@ -1889,15 +1898,76 @@ function fmtEta(ms) {
   return `~${Math.ceil(secs / 60)} min left`;
 }
 
+function resetAllScanSources() {
+  scanAllSources = Object.fromEntries(Object.keys(ALL_SCAN_LABELS).map((source) => [source, { status: 'queued' }]));
+}
+
+function renderAllScanStatus(finalText = '') {
+  const finished = new Set(['done', 'skipped', 'error']);
+  let finishedCount = 0; let runningCount = 0;
+  Object.entries(ALL_SCAN_LABELS).forEach(([source, label]) => {
+    const item = scanAllSources[source] || { status: 'queued' };
+    const status = item.status || item.state || 'queued';
+    const chip = $(`scan-all-${source}`);
+    chip.dataset.state = status;
+    if (finished.has(status)) finishedCount += 1;
+    if (status === 'running') runningCount += 1;
+    const detail = item.detail || item.reason || item.error || '';
+    const stateLabel = status === 'done' ? 'done'
+      : (status === 'error' ? 'failed'
+        : (status === 'skipped' ? 'skipped' : (status === 'running' ? (detail || 'scanning') : 'waiting')));
+    chip.textContent = `${label} · ${stateLabel}`;
+    chip.title = detail || stateLabel;
+  });
+  $('scan-all-status').classList.remove('hidden');
+  $('scan-fill').style.width = `${Math.round((finishedCount / Object.keys(ALL_SCAN_LABELS).length) * 100)}%`;
+  if (finalText) $('scan-text').textContent = finalText;
+  else if (scanAllRunning) $('scan-text').textContent = `Scanning all available marketplaces · ${finishedCount}/4 finished${runningCount ? ` · ${runningCount} active` : ''}`;
+}
+
+function onAllScanUpdate(message) {
+  if (!message || !message.sources) return;
+  scanAllSources = { ...scanAllSources, ...message.sources };
+  renderAllScanStatus();
+}
+
+function syncMarketplaceAllScan(source, status) {
+  if (!scanAllRunning || !scanAllSources[source] || (scanAllSources[source].status || scanAllSources[source].state) !== 'running') return;
+  const progress = status && status.progress;
+  const detail = progress && progress.total
+    ? `${progress.checked || 0}/${progress.total}`
+    : (status && status.running ? 'scanning' : scanAllSources[source].detail);
+  scanAllSources[source] = { ...scanAllSources[source], detail };
+  renderAllScanStatus();
+}
+
+function updateDiscogsAllScan(message) {
+  if (!scanAllRunning || !scanAllSources.discogs || (scanAllSources.discogs.status || scanAllSources.discogs.state) !== 'running') return;
+  let detail = 'scanning';
+  if (message.phase === 'wantlist') detail = 'wantlist';
+  else if (message.phase === 'prices') detail = `${message.checked || 0}/${message.total || '?'}`;
+  else if (message.phase === 'warmup') detail = 'sold medians';
+  else if (message.phase === 'pushing') detail = 'saving medians';
+  else if (message.phase === 'gems') detail = 'rare gems';
+  else if (message.phase === 'scan') detail = `${message.checked || 0}/${message.total || '?'}`;
+  scanAllSources.discogs = { ...scanAllSources.discogs, detail };
+  renderAllScanStatus();
+}
+
 function setScanUI(on) {
   scanning = on;
   $('scanbar').classList.toggle('hidden', !on);
+  $('scan-all-status').classList.toggle('hidden', !scanAllRunning);
+  $('btn-scan-all').disabled = on || scouting || cityDigging;
   $('btn-fullscan').disabled = on || scouting || cityDigging;
   $('scout-run').disabled = on || scouting || cityDigging;
   $('city-run').disabled = on || cityDigging;
+  $('btn-scan-all').innerHTML = on && scanAllRunning
+    ? '<span>Scanning all…</span>'
+    : '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Scan all</span>';
   $('btn-fullscan').innerHTML = on
     ? '<span>Scanning…</span>'
-    : `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${activePlatform === 'vinted' ? 'Scan Vinted' : (activePlatform === 'ebay' ? 'Scan eBay' : (activePlatform === 'tradera' ? 'Scan Tradera' : 'Scan wantlist'))}</span>`;
+    : `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${ALL_SCAN_LABELS[activePlatform]} only</span>`;
   // While a scan runs the badge says "Scanning…"; once it ends, re-check the real service state.
   if (on) setServiceBadge(lastHealth); else refreshHealth();
 }
@@ -1916,7 +1986,57 @@ function acceptDiscogsScan(res) {
   }
 }
 
+async function startAllScans() {
+  if (!hasApi || !window.api.scanAll) { alert('Scan all needs the desktop app (run it with npm start).'); return; }
+  if (scanAllRunning || scanning || scouting || cityDigging) return;
+  if (scanRetryTimer) { clearTimeout(scanRetryTimer); scanRetryTimer = null; }
+  if (scanAllCompletionTimer) { clearTimeout(scanAllCompletionTimer); scanAllCompletionTimer = null; }
+  scanAllRunning = true;
+  resetAllScanSources();
+  setScanUI(true);
+  $('btn-scan-cancel').textContent = 'Stop Discogs';
+  $('btn-scan-cancel').title = 'Stops the Discogs scan; marketplace API checks finish independently';
+  renderAllScanStatus('Starting every available marketplace…');
+  let finalText = '';
+  try {
+    const outcome = await window.api.scanAll();
+    scanAllSources = { ...scanAllSources, ...((outcome && outcome.sources) || {}) };
+    const results = (outcome && outcome.results) || {};
+    if (results.discogs && !results.discogs.postponed) {
+      acceptDiscogsScan(results.discogs);
+      refreshGems();
+    }
+    if (results.vinted) applyVintedSnapshot(results.vinted);
+    if (results.ebay) applyEbaySnapshot(results.ebay);
+    if (results.tradera) applyTraderaSnapshot(results.tradera);
+    const states = Object.values(scanAllSources).map((item) => item.status || item.state);
+    const completed = states.filter((state) => state === 'done').length;
+    const skipped = states.filter((state) => state === 'skipped').length;
+    const failed = states.filter((state) => state === 'error').length;
+    finalText = `All scans finished · ${completed} completed${skipped ? ` · ${skipped} skipped` : ''}${failed ? ` · ${failed} failed` : ''}`;
+  } catch (error) {
+    finalText = `Scan all failed to start: ${error && error.message ? error.message : String(error)}`;
+  } finally {
+    scanAllRunning = false;
+    setScanUI(false);
+    renderVintedStatus(); renderEbayStatus(); renderTraderaStatus();
+    $('scanbar').classList.remove('hidden');
+    $('scan-all-status').classList.remove('hidden');
+    $('btn-scan-cancel').textContent = 'Stop';
+    $('btn-scan-cancel').title = '';
+    renderAllScanStatus(finalText || 'All scans finished');
+    scanAllCompletionTimer = setTimeout(() => {
+      scanAllCompletionTimer = null;
+      if (!scanning && !scanAllRunning) {
+        $('scanbar').classList.add('hidden');
+        $('scan-all-status').classList.add('hidden');
+      }
+    }, 12_000);
+  }
+}
+
 async function startScan(opts = {}) {
+  if (scanAllRunning) return;
   if (activePlatform === 'vinted') {
     if (!hasApi || !window.api.vintedScanNow || vintedStatus.running) return;
     vintedStatus = { ...vintedStatus, running: true, health: 'scanning', message: 'Checking newest Vinted listings and one Deep Hunt target…' };
@@ -2017,6 +2137,7 @@ async function maybeAutoScan() {
 
 function onScanProgress(m) {
   if (!m) return;
+  if (scanAllRunning) { updateDiscogsAllScan(m); return; }
   if (m.phase === 'wantlist') { $('scan-text').textContent = 'Fetching your wantlist…'; $('scan-fill').style.width = '3%'; return; }
   if (m.phase === 'prices') {
     const total = m.total || 1;
@@ -2588,6 +2709,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('city-osm-credit').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://www.openstreetmap.org/copyright'); });
   $('btn-filter-toggle').addEventListener('click', () => setFilterPanel($('btn-filter-toggle').getAttribute('aria-expanded') !== 'true'));
   $('btn-filter-reset').addEventListener('click', resetFilters);
+  $('btn-scan-all').addEventListener('click', startAllScans);
   $('btn-fullscan').addEventListener('click', () => startScan({ fullMedians: true }));
   $('vinted-scan-now').addEventListener('click', () => startScan());
   $('vinted-backfill').addEventListener('click', async () => {
@@ -2701,6 +2823,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('shipEst').addEventListener('input', onFilterChanged);
 
   if (hasApi) window.api.onScrapeProgress(onScanProgress);
+  if (hasApi && window.api.onScanAllUpdate) window.api.onScanAllUpdate(onAllScanUpdate);
   if (hasApi && window.api.onVintedUpdate) window.api.onVintedUpdate((message) => applyVintedSnapshot(message, { notify: true }));
   if (hasApi && window.api.onEbayUpdate) window.api.onEbayUpdate((message) => applyEbaySnapshot(message, { notify: true }));
   if (hasApi && window.api.onTraderaUpdate) window.api.onTraderaUpdate((message) => applyTraderaSnapshot(message, { notify: true }));

@@ -40,9 +40,13 @@
     </details>
 
     <div class="actions">
-      <button id="btn-fullscan" class="scan" title="Scan the full wantlist with real condition, shipping and fresh sold medians">
+      <button id="btn-scan-all" class="scan all-scan" title="Start Discogs, Vinted, eBay and Tradera together; unavailable sources are skipped">
         <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span>Scan wantlist</span>
+        <span>Scan all</span>
+      </button>
+      <button id="btn-fullscan" class="scan current-scan" title="Scan only the marketplace currently selected">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Discogs only</span>
       </button>
       <button id="btn-telegram" class="icon-button tg-badge" title="Telegram alerts" aria-label="Telegram alerts">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M23.91 3.79 20.3 20.84c-.25 1.21-.98 1.5-1.99.94l-5.5-4.07-2.66 2.57c-.3.3-.55.56-1.1.56l.38-5.56 10.1-9.13c.44-.39-.1-.61-.68-.23L6.3 13.3l-5.45-1.7c-1.18-.36-1.2-1.17.26-1.75l21.26-8.2c.97-.36 1.83.24 1.54 1.73z"/></svg>
@@ -57,6 +61,12 @@
     <div class="scan-state-icon"><span></span></div>
     <div class="scanbar-body">
       <span class="scanbar-text" id="scan-text">Starting scan…</span>
+      <div id="scan-all-status" class="scan-all-status hidden" aria-label="Marketplace scan progress" aria-live="polite">
+        <span id="scan-all-discogs" data-state="queued">Discogs Â· waiting</span>
+        <span id="scan-all-vinted" data-state="queued">Vinted Â· waiting</span>
+        <span id="scan-all-ebay" data-state="queued">eBay Â· waiting</span>
+        <span id="scan-all-tradera" data-state="queued">Tradera Â· waiting</span>
+      </div>
       <div class="scanbar-track"><div class="scanbar-fill" id="scan-fill"></div></div>
     </div>
     <button id="btn-scan-cancel" class="ghost small">Stop</button>
@@ -123,7 +133,7 @@
       <div class="vinted-panel-copy">
         <div class="vinted-kicker">EBAY · OFFICIAL BROWSE API</div>
         <h3>Wantlist scanner</h3>
-        <p>Search eBay for exact Discogs pressings, compare landed cost with sold medians and open the original eBay listing to buy.</p>
+        <p>Search eBay for exact Discogs pressings, compare landed cost with sold medians and open the original listing. New matches trigger desktop alerts while Deal Shark is open.</p>
       </div>
       <div class="vinted-panel-controls">
         <label class="switch-row vinted-switch" for="ebay-enabled">
@@ -156,7 +166,7 @@
       <div class="vinted-panel-copy">
         <div class="vinted-kicker">TRADERA · OFFICIAL REST API</div>
         <h3>Wantlist scanner</h3>
-        <p>Search fixed-price Tradera listings, verify the exact Discogs pressing and compare the converted landed-cost estimate with sold medians.</p>
+        <p>Search fixed-price Tradera listings, verify the exact Discogs pressing and compare the converted landed-cost estimate with sold medians. New matches trigger desktop alerts while Deal Shark is open.</p>
       </div>
       <div class="vinted-panel-controls">
         <label class="switch-row vinted-switch" for="tradera-enabled">

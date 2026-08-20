@@ -240,6 +240,20 @@ seller-inventory loads by priority genre/style. It shows a desktop notification 
 "Finding the real diamonds"). HTTP requests and stored tokens stay in Electron's **main** process
 and never touch the rendered page.
 
+### Scan all marketplaces
+
+The primary **Scan all** action starts every available adapter together: the full Discogs wantlist,
+Vinted's newest feed plus one Deep Hunt target, and full-wantlist eBay and Tradera searches. Each
+source has its own progress state. Missing credentials and already-running sources are shown as
+skipped; a failure in one adapter never cancels the other scans. The secondary header action still
+scans only the marketplace selected in the switcher.
+
+**Alert boundary:** eBay, Tradera and Vinted are local desktop integrations. New matches trigger
+desktop notifications while Deal Shark is open, but they do **not** currently use the cloud email
+watcher. The existing 24/7 Resend/Gmail email and Telegram delivery path is Discogs-only. Adding
+marketplace email requires either a local mail credential (alerts only while the app runs) or moving
+those API scans into the cloud watcher with separate encrypted credentials and rate budgets.
+
 ### Scan wantlist (local full sweep, on demand)
 
 The **Scan wantlist** button is independent of the source setting: it runs a **full local sweep of
@@ -291,7 +305,7 @@ the clearly labelled local estimate — with that pressing's real Discogs sold m
 Background watch rotates through a small wantlist batch at the chosen interval; **Scan eBay now**
 checks the whole wantlist. The adapter stops before 4,800 requests in a UTC day, leaving headroom below
 eBay's normal Browse allocation. It is read-only: the app opens the original eBay URL and never bids,
-buys, sends offers or messages. Sandbox credentials can test OAuth, but real production inventory
+buys, sends offers or messages. New matches use desktop notifications, not cloud email. Sandbox credentials can test OAuth, but real production inventory
 requires eBay Buy API production approval.
 
 ### Tradera (official REST API v4)
@@ -318,6 +332,7 @@ Background watch rotates through a small wantlist batch at the chosen interval; 
 checks the whole wantlist. The adapter stops before 9,500 aggregate requests per UTC day, below
 Tradera's documented default limit of 10,000 calls per method per 24 hours. If the ECB feed is briefly
 unavailable, the last successful rate may be reused for at most seven days and is labelled cached.
+New matches use desktop notifications, not cloud email.
 
 ## Desktop releases
 

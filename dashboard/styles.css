@@ -106,6 +106,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 }
 .actions button.scan:hover { filter: brightness(1.05); transform: translateY(-1px); }
 .actions button.scan:disabled { color: var(--muted); background: #1b2732; box-shadow: none; cursor: default; transform: none; }
+.actions button.current-scan {
+  min-width: 112px;
+  color: var(--muted);
+  background: #111a23;
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+.actions button.current-scan:hover { color: var(--text); background: var(--panel-2); border-color: #35485a; }
 
 /* Compact health indicator and the technical detail popover */
 .svc {
@@ -189,6 +197,23 @@ button.pill { width: 100%; text-align: left; cursor: pointer; }
 .scan-state-icon span { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: svc-pulse 1.3s ease-out infinite; }
 .scanbar-body { min-width: 0; flex: 1; }
 .scanbar-text { display: block; color: #c9d7d0; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 7px; }
+.scan-all-status { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.scan-all-status span {
+  min-height: 24px;
+  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(7, 12, 17, .42);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.scan-all-status span[data-state="running"] { color: var(--accent); border-color: #34547e; background: var(--accent-soft); }
+.scan-all-status span[data-state="done"] { color: var(--green); border-color: #245b40; background: rgba(59,216,135,.08); }
+.scan-all-status span[data-state="error"] { color: var(--red); border-color: #60343a; background: rgba(255,111,120,.07); }
+.scan-all-status span[data-state="skipped"] { color: var(--amber); border-color: #65502c; background: rgba(240,183,78,.07); }
 .scanbar-track { height: 4px; border-radius: 999px; overflow: hidden; background: #0a1117; }
 .scanbar-fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2ac778, var(--green-bright)); transition: width .25s ease; }
 .ghost.small { padding: 6px 11px; font-size: 11px; }

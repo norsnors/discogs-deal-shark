@@ -20,6 +20,7 @@
     },
     "files": [
       "main.js",
+      "all-scan.js",
       "scan-policy.js",
       "git-policy.js",
       "median-publisher.js",

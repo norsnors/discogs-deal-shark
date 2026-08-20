@@ -31,6 +31,7 @@ const { createEbayClient } = require('./ebay/client');
 const { createEbayService } = require('./ebay/service');
 const { createTraderaClient } = require('./tradera/client');
 const { createTraderaService } = require('./tradera/service');
+const { runAllScans } = require('./all-scan');
 
 // Preserve settings for users upgrading from Deal Watcher. Electron derives a new user-data folder
 // from productName; switching blindly would make an upgraded app look like a clean install. Fresh
@@ -467,6 +468,7 @@ async function cloudScanActive() {
 // lowest). No email, no warm-up, no new-low dedupe. Cancellable; emits progress to the renderer.
 let scrapeAbort = false;
 let scrapeRunning = false;
+let allScanRunning = false;
 let scoutAbort = false;
 let scoutRunning = false;
 let cityDigAbort = false;
@@ -1888,6 +1890,58 @@ async function testTraderaConnection() {
   }
 }
 
+async function runAllMarketplaceScans(win) {
+  if (allScanRunning) throw new Error('An all-marketplaces scan is already running.');
+  allScanRunning = true;
+  try {
+    let config = {};
+    try { config = loadWatcher().loadConfig(configPath()) || {}; } catch { config = {}; }
+    const vinted = getVintedService();
+    const ebay = getEbayService();
+    const tradera = getTraderaService();
+    const vintedSnapshot = vinted.snapshot();
+    const ebaySnapshot = ebay.snapshot();
+    const traderaSnapshot = tradera.snapshot();
+    const runner = (run, skipReason = null) => skipReason ? { skipReason } : { run };
+    const runService = async (run) => {
+      const result = await run();
+      const status = result && result.status;
+      if (status && (status.error || status.health === 'error')) throw new Error(status.error || 'Marketplace scan failed');
+      return result;
+    };
+    const send = (message) => {
+      try { win.webContents.send('scan-all:update', message); } catch { /* window gone */ }
+    };
+
+    return await runAllScans({
+      runners: {
+        discogs: runner(
+          () => runScrape(win, { fullMedians: true, coordinated: true }),
+          !config.username || !config.token ? 'Discogs account is not configured' : (scrapeRunning ? 'Discogs is already scanning' : null),
+        ),
+        vinted: runner(
+          () => runService(() => vinted.runOnce({ forceDeep: true })),
+          !config.username || !config.token ? 'Discogs account is not configured'
+            : (vintedSnapshot.status && vintedSnapshot.status.running ? 'Vinted is already scanning' : null),
+        ),
+        ebay: runner(
+          () => runService(() => ebay.runOnce({ all: true })),
+          !(ebaySnapshot.status && ebaySnapshot.status.configured) ? 'eBay API credentials are not configured'
+            : (ebaySnapshot.status.running ? 'eBay is already scanning' : null),
+        ),
+        tradera: runner(
+          () => runService(() => tradera.runOnce({ all: true })),
+          !(traderaSnapshot.status && traderaSnapshot.status.configured) ? 'Tradera API credentials are not configured'
+            : (traderaSnapshot.status.running ? 'Tradera is already scanning' : null),
+        ),
+      },
+      onUpdate: send,
+    });
+  } finally {
+    allScanRunning = false;
+  }
+}
+
 ipcMain.handle('config:get', () => {
   const c = readConfigFile();
   return {
@@ -1909,6 +1963,7 @@ ipcMain.handle('gems:get', () => getGems());
 ipcMain.handle('status:get', () => getStatus());
 ipcMain.handle('health:get', () => getServiceHealth());
 ipcMain.handle('open:external', (_e, url) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); });
+ipcMain.handle('scan:all', (e) => runAllMarketplaceScans(BrowserWindow.fromWebContents(e.sender)));
 ipcMain.handle('scrape:run', (e, opts) => runScrape(BrowserWindow.fromWebContents(e.sender), opts || {}));
 ipcMain.handle('verify:run', (e, items) => runVerify(BrowserWindow.fromWebContents(e.sender), items || []));
 ipcMain.handle('scrape:cancel', () => { scrapeAbort = true; return true; });
@@ -2310,7 +2365,11 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
   app.whenReady().then(createWindow);
-  app.on('before-quit', () => { if (vintedService) vintedService.stop(); if (ebayService) ebayService.stop(); });
+  app.on('before-quit', () => {
+    if (vintedService) vintedService.stop();
+    if (ebayService) ebayService.stop();
+    if (traderaService) traderaService.stop();
+  });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 }

@@ -14,6 +14,13 @@ contextBridge.exposeInMainWorld('api', {
   getStatus: () => ipcRenderer.invoke('status:get'),
   getHealth: () => ipcRenderer.invoke('health:get'),
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
+  // One coordinated action starts every available marketplace scanner concurrently.
+  scanAll: () => ipcRenderer.invoke('scan:all'),
+  onScanAllUpdate: (cb) => {
+    const h = (_e, m) => cb(m);
+    ipcRenderer.on('scan-all:update', h);
+    return () => ipcRenderer.removeListener('scan-all:update', h);
+  },
   // Local scan: full sweep, or a prioritized quick scan ({ quick: true }).
   scrapeRun: (opts) => ipcRenderer.invoke('scrape:run', opts),
   scrapeCancel: () => ipcRenderer.invoke('scrape:cancel'),

@@ -16,6 +16,7 @@ if (!fs.statSync(asarPath, { throwIfNoEntry: false })?.isFile()) {
 const packagedFiles = new Set(asar.listPackage(asarPath).map((file) => file.replaceAll('\\', '/')));
 const requiredAppFiles = [
   '/main.js',
+  '/all-scan.js',
   '/scan-policy.js',
   '/scout-policy.js',
   '/city-dig-policy.js',

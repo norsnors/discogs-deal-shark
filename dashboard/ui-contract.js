@@ -21,7 +21,8 @@ for (const id of rendererRefs) assert.strictEqual(idCounts.get(id), 1, `renderer
 for (const [id, count] of idCounts) assert.strictEqual(count, 1, `HTML id #${id} is duplicated`);
 
 const preserved = [
-  'tab-deals', 'tab-gems', 'tab-scout', 'tab-city', 'btn-fullscan', 'btn-scan-cancel', 'btn-settings', 'btn-telegram',
+  'tab-deals', 'tab-gems', 'tab-scout', 'tab-city', 'btn-scan-all', 'btn-fullscan', 'btn-scan-cancel', 'btn-settings', 'btn-telegram',
+  'scan-all-status', 'scan-all-discogs', 'scan-all-vinted', 'scan-all-ebay', 'scan-all-tradera',
   'svc-badge', 'pill-sweep', 'pill-cron', 'push-badge', 'pill-wantlist', 'pill-deals',
   'search', 'minValue', 'minDiscount', 'maxTotal', 'shipEst', 'sortBy', 'vgPlusOnly',
   'freshOnly', 'showHidden', 'showNearMiss', 'settings-modal', 'cloud-modal', 'telegram-modal',
@@ -56,6 +57,10 @@ for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:t
 for (const channel of ['tradera:credentialsStatus', 'tradera:saveCredentials', 'tradera:test', 'tradera:snapshot', 'tradera:setEnabled', 'tradera:configure', 'tradera:scanNow']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Tradera IPC channel ${channel} is wired end-to-end`);
 }
+for (const channel of ['scan:all', 'scan-all:update']) {
+  assert.ok(preload.includes(channel) && main.includes(channel), `Unified scan IPC channel ${channel} is wired end-to-end`);
+}
+assert.ok(/function startAllScans\(/.test(renderer) && /window\.api\.scanAll\(\)/.test(renderer), 'renderer exposes one coordinated scan action');
 assert.ok(/activePlatform === 'vinted'/.test(renderer) && /activePlatform === 'ebay'/.test(renderer) && /activePlatform === 'tradera'/.test(renderer) && /setPlatform\(activePlatform\)/.test(renderer), 'renderer keeps first-class Vinted, eBay and Tradera platform state');
 assert.ok(/safeStorage\.encryptString/.test(main) && !/clientSecret: credentials\.clientSecret/.test(preload), 'eBay Cert ID stays in encrypted main-process storage');
 assert.ok(/TRADERA_CREDENTIALS_FILE/.test(main) && /safeStorage\.encryptString/.test(main) && !/appKey: credentials\.appKey/.test(preload), 'Tradera App Key stays in encrypted main-process storage');
