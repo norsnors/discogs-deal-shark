@@ -155,6 +155,13 @@ exclusion that could kill the once-in-a-lifetime steal:
 | `discogs.js` | official-API client (wantlist, stats, suggestions, release), rate-limit aware | `node discogs.js --selftest` |
 | `store.js` | JSON-file store (history / alert memory / suggestions / deals) | `node store.js --selftest` |
 | `dashboard/listing-history.js` | durable exact-copy price/relist history for desktop scans | `node dashboard/listing-history.js --selftest` |
+| `dashboard/ebay/client.js` | official eBay OAuth + Browse API client; application-token cache and pacing | `node dashboard/ebay/client.js --selftest` |
+| `dashboard/ebay/state.js` | local eBay deal, availability and API-budget state; strips secrets | `node dashboard/ebay/state.js --selftest` |
+| `dashboard/ebay/service.js` | rotating/full wantlist searches, pressing matching and deal evaluation | `node dashboard/ebay/service.js --selftest` |
+| `dashboard/tradera/client.js` | official Tradera REST v4 app-auth client; search/item normalization and pacing | `node dashboard/tradera/client.js --selftest` |
+| `dashboard/tradera/fx.js` | daily ECB SEK conversion with an in-memory cache | `node dashboard/tradera/fx.js --selftest` |
+| `dashboard/tradera/state.js` | local Tradera deal, availability, FX and API-budget state; strips secrets | `node dashboard/tradera/state.js --selftest` |
+| `dashboard/tradera/service.js` | fixed-price searches, pressing matching and converted landed-cost evaluation | `node dashboard/tradera/service.js --selftest` |
 | `mailer.js` | Gmail SMTP + HTML deal-email renderer | `node mailer.js --selftest` |
 | `server.js` | tiny token-protected read API for the dashboard | — |
 | `watcher.js` | the paced sweep loop tying it together | `node watcher.js --itest` |
@@ -266,6 +273,51 @@ title, format, condition and price, so the initial city load never performs one 
 per listing. Genre/style metadata already present in the shared 180-day cache is added opportunistically;
 uncached listings remain visible and are marked for later enrichment. Buying and cart actions remain
 outside the app.
+
+### eBay (official Browse API)
+
+The eBay marketplace view uses `GET /buy/browse/v1/item_summary/search` plus `GET /buy/browse/v1/item/{item_id}`.
+OAuth uses the client-credentials grant and caches the short-lived application token in memory. The
+App ID is stored locally; the Cert ID is encrypted with Electron `safeStorage` in
+`ebay-credentials.json` and is never returned to the renderer, logged or written to marketplace state.
+
+Every eBay query is built from one Discogs wantlist artist/title plus `vinyl`, sorted newest-first and
+filtered to the configured delivery country. Auction-only and unavailable items are rejected. A title
+match is not enough: the adapter uses eBay title, description and item aspects (catalogue number,
+label, year, format and variant clues) to resolve a concrete Discogs pressing. Ambiguous versions and
+currency mismatches are ignored. Deals compare item price plus real eBay shipping when returned — or
+the clearly labelled local estimate — with that pressing's real Discogs sold median.
+
+Background watch rotates through a small wantlist batch at the chosen interval; **Scan eBay now**
+checks the whole wantlist. The adapter stops before 4,800 requests in a UTC day, leaving headroom below
+eBay's normal Browse allocation. It is read-only: the app opens the original eBay URL and never bids,
+buys, sends offers or messages. Sandbox credentials can test OAuth, but real production inventory
+requires eBay Buy API production approval.
+
+### Tradera (official REST API v4)
+
+The Tradera marketplace view uses `GET /v4/search`, `GET /v4/items/{itemId}` and the app-authenticated
+`GET /v4/reference-data/time` health check. Requests carry `X-App-Id` and `X-App-Key`; the App ID is
+stored locally while the App Key is encrypted with Electron `safeStorage` in
+`tradera-credentials.json`. No Tradera user token is requested or stored.
+
+Tradera's v4 OpenAPI currently leaves `SearchResult` and its request models structurally empty. The
+client therefore normalizes the documented JSON camelCase fields and the equivalent legacy
+`SearchResult`/`SearchItem` field names, with fixtures covering both forms. It searches one Discogs
+wantlist artist/title at a time and retrieves up to three promising item details for pressing evidence.
+Title overlap alone never qualifies: catalogue number, format, year and other detail text feed the
+same conservative pressing resolver used by the eBay and Vinted adapters.
+
+Only listings with a positive `buyItNowPrice` are eligible. Auction-only rows are ignored, and the
+integration contains no bidding, buying, offer, messaging or timing endpoints. Native SEK item prices
+are converted to the configured Discogs currency with the ECB daily reference-rate feed. Tradera's
+shipping options are retained as provenance but are not assumed to represent delivery to the user's
+country; the existing clearly labelled shipping estimate is used for landed-cost evaluation.
+
+Background watch rotates through a small wantlist batch at the chosen interval; **Scan Tradera now**
+checks the whole wantlist. The adapter stops before 9,500 aggregate requests per UTC day, below
+Tradera's documented default limit of 10,000 calls per method per 24 hours. If the ECB feed is briefly
+unavailable, the last successful rate may be reused for at most seven days and is labelled cached.
 
 ## Desktop releases
 

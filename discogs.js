@@ -18,6 +18,16 @@
 
 const API = 'https://api.discogs.com';
 const DEFAULT_UA = 'DiscogsDealShark/1.0';
+// Electron features create separate logical clients, but they all spend the same Discogs token's
+// 60-request/minute allowance. Share one in-process queue and header state per credential so Vinted
+// metadata enrichment cannot race a wantlist scan, Scout or City Dig past that global budget.
+const RATE_STATES = new Map();
+
+function sharedRateState(token) {
+  const key = token ? `token:${token}` : 'anonymous';
+  if (!RATE_STATES.has(key)) RATE_STATES.set(key, { lastAt: 0, remaining: null, queue: Promise.resolve() });
+  return RATE_STATES.get(key);
+}
 
 function makeClient(opts = {}) {
   const token = opts.token || '';
@@ -27,16 +37,15 @@ function makeClient(opts = {}) {
   // Conservative floor between calls so we never trip the per-minute cap.
   const minIntervalMs = opts.minIntervalMs ?? (token ? 1100 : 2500);
 
-  let lastAt = 0;
-  let remaining = null; // last seen X-Discogs-Ratelimit-Remaining
+  const rateState = sharedRateState(token);
 
-  async function req(pathname, { method = 'GET', searchParams } = {}) {
+  async function runReq(pathname, { method = 'GET', searchParams } = {}) {
     // Self-throttle: keep at least minIntervalMs between calls, and pause if the
     // window is nearly exhausted.
     const now = Date.now();
-    const wait = Math.max(0, lastAt + minIntervalMs - now);
+    const wait = Math.max(0, rateState.lastAt + minIntervalMs - now);
     if (wait) await sleep(wait);
-    if (remaining != null && remaining <= 1) await sleep(60_000); // window almost empty
+    if (rateState.remaining != null && rateState.remaining <= 1) await sleep(60_000); // window almost empty
 
     const url = new URL(API + pathname);
     if (searchParams) for (const [k, v] of Object.entries(searchParams)) url.searchParams.set(k, v);
@@ -45,7 +54,7 @@ function makeClient(opts = {}) {
     if (token) headers.Authorization = `Discogs token=${token}`;
 
     for (let attempt = 0; attempt < 4; attempt++) {
-      lastAt = Date.now();
+      rateState.lastAt = Date.now();
       let res;
       try {
         res = await fetchImpl(url.toString(), { method, headers });
@@ -55,7 +64,7 @@ function makeClient(opts = {}) {
         continue;
       }
       const rem = res.headers.get('x-discogs-ratelimit-remaining');
-      if (rem != null) remaining = parseInt(rem, 10);
+      if (rem != null) rateState.remaining = parseInt(rem, 10);
 
       if (res.status === 429) {
         const retry = parseInt(res.headers.get('retry-after') || '', 10);
@@ -75,6 +84,13 @@ function makeClient(opts = {}) {
       return { status: res.status, data };
     }
     throw new Error(`Discogs request gave up after retries: ${pathname}`);
+  }
+
+  function req(pathname, options = {}) {
+    const run = () => runReq(pathname, options);
+    const pending = rateState.queue.then(run, run);
+    rateState.queue = pending.then(() => undefined, () => undefined);
+    return pending;
   }
 
   // --- endpoints ---
@@ -203,7 +219,7 @@ function makeClient(opts = {}) {
     return data || { id: Number(releaseId) };
   }
 
-  return { req, getWantlist, getMarketplaceStats, getPriceSuggestions, getRelease, getInventory, getUserProfile, searchReleases, addToWantlist, get rateRemaining() { return remaining; } };
+  return { req, getWantlist, getMarketplaceStats, getPriceSuggestions, getRelease, getInventory, getUserProfile, searchReleases, addToWantlist, get rateRemaining() { return rateState.remaining; } };
 }
 
 module.exports = { makeClient, API, DEFAULT_UA };
@@ -267,6 +283,20 @@ if (require.main === module && process.argv.includes('--selftest')) {
     assert.strictEqual(searchUrl.searchParams.get('type'), 'release');
     assert.strictEqual(searchUrl.searchParams.get('format'), 'Vinyl');
     assert.strictEqual((await c.addToWantlist('someone', 777)).id, 777);
+
+    let active = 0;
+    let maxActive = 0;
+    const sharedFetch = async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return { ok: true, status: 200, headers: new Map([['x-discogs-ratelimit-remaining', '50']]), json: async () => ({ id: 1, title: 'Shared queue', artists: [] }), text: async () => '' };
+    };
+    const sharedA = makeClient({ token: 'SHARED-RATE-TEST', fetch: sharedFetch, minIntervalMs: 0 });
+    const sharedB = makeClient({ token: 'SHARED-RATE-TEST', fetch: sharedFetch, minIntervalMs: 0 });
+    await Promise.all([sharedA.getRelease(1), sharedB.getRelease(2)]);
+    assert.strictEqual(maxActive, 1, 'separate clients sharing a token serialize against one Discogs rate budget');
 
     // token present -> Authorization header set
     assert.ok(calls.every((x) => x.init.headers.Authorization === 'Discogs token=TESTTOKEN'), 'token header sent');

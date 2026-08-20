@@ -92,6 +92,24 @@ let cityStoreMarkers = new Map();
 let scannedOnce = false;  // has a local scan run (or its results been loaded) this session? Distinguishes
                           // "no scan yet — go scan" from "scanned, nothing matched right now".
 
+// Marketplace is a first-class dimension: each platform keeps its own Deals/Rare Gems state while
+// the shared cards, search and value filters are reused. Future adapters only need another entry
+// here plus their own main-process IPC; Discogs-only tools remain separate tabs.
+const savedPlatform = (() => { try { return localStorage.getItem('deal-shark-platform'); } catch { return null; } })();
+let activePlatform = ['discogs', 'vinted', 'ebay', 'tradera'].includes(savedPlatform) ? savedPlatform : 'discogs';
+const platformViews = {
+  discogs: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'scan', scannedOnce: false },
+  vinted: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'vinted', scannedOnce: false },
+  ebay: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'ebay', scannedOnce: false },
+  tradera: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'tradera', scannedOnce: false },
+};
+let vintedStatus = { enabled: false, running: false, health: 'idle', lastPollAt: null, nextPollAt: null, requestsLastHour: 0, message: null, backfill: { active: false, checked: 0, total: 0, listingsFound: 0 } };
+let vintedRefreshBusy = false;
+let ebayStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 4800, message: null, progress: null };
+let ebayRefreshBusy = false;
+let traderaStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 9500, message: null, progress: null, fx: null };
+let traderaRefreshBusy = false;
+
 const $ = (id) => document.getElementById(id);
 const openUrl = (url) => { if (!url) return; if (hasApi) window.api.openExternal(url); else window.open(url, '_blank'); };
 
@@ -100,10 +118,19 @@ const openUrl = (url) => { if (!url) return; if (hasApi) window.api.openExternal
 // release is hidden until you tick "show hidden" and restore it — keeps deals you've already judged
 // out of the way without losing them.
 const DISMISS_KEY = 'ddw-dismissed';
-function loadDismissed() { try { return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]').map(String)); } catch { return new Set(); } }
+function loadDismissed() {
+  try {
+    // v1 stored bare Discogs release ids. Namespace them during load so hiding a Discogs pressing
+    // can never accidentally hide the corresponding Vinted match (or a future marketplace).
+    return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]').map((value) => {
+      const key = String(value);
+      return key.includes(':') ? key : `discogs:${key}`;
+    }));
+  } catch { return new Set(); }
+}
 let dismissed = loadDismissed();
 const saveDismissed = () => { try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...dismissed])); } catch { /* private mode */ } };
-const sym = (c) => ({ EUR: '€', USD: '$', GBP: '£' }[c] || '');
+const sym = (c) => ({ EUR: '€', USD: '$', GBP: '£', SEK: 'SEK ' }[c] || '');
 const money = (v, c) => (v == null ? '—' : sym(c) + Number(v).toFixed(2));
 const pct = (d) => (d == null ? '—' : Math.round(d * 100) + '%');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
@@ -240,16 +267,34 @@ function updateViewCopy() {
   const gems = activeTab === 'gems';
   const scout = activeTab === 'scout';
   const city = activeTab === 'city';
-  $('view-eyebrow').textContent = city ? 'DIG THE CITY' : (scout ? 'BEYOND YOUR WANTLIST' : (gems ? 'RARITY WATCH' : 'YOUR WANTLIST'));
-  $('view-title').textContent = city ? 'Antwerp record stores, one inventory at a time' : (scout ? 'Scout valuable records you may be missing' : (gems ? 'Rare records that just surfaced' : 'Deals worth opening'));
-  $('view-intro').textContent = city
-    ? 'See every mapped shop for free, then load the first 100 vinyl listings from every connected Discogs seller in the city.'
-    : scout
-    ? 'Search Discogs by style or genre, filter on estimated VG+ value, and add promising pressings straight to your wantlist.'
-    : (gems
-        ? 'First copies after a release was unavailable — price is context, availability is the signal.'
-        : 'Verified copies ranked by total value, so the strongest opportunities stay on top.');
+  const vinted = activePlatform === 'vinted';
+  const ebay = activePlatform === 'ebay';
+  const tradera = activePlatform === 'tradera';
+  if (vinted) {
+    $('view-eyebrow').textContent = gems ? 'VINTED RARITY WATCH' : 'VINTED × YOUR WANTLIST';
+    $('view-title').textContent = gems ? 'Wanted records that surfaced again' : 'Vinted deals before they disappear';
+    $('view-intro').textContent = gems ? 'A targeted Vinted search found nothing, then a matching copy appeared — availability is the signal.' : 'Pressing-matched Vinted listings, valued against that exact Discogs release. Reissues and ambiguous versions are ignored.';
+  } else if (ebay) {
+    $('view-eyebrow').textContent = gems ? 'EBAY RARITY WATCH' : 'EBAY × YOUR WANTLIST';
+    $('view-title').textContent = gems ? 'Wanted records newly available on eBay' : 'eBay deals worth opening';
+    $('view-intro').textContent = gems ? 'An official eBay Browse search found no matching pressing, then a verified copy appeared.' : 'Official eBay listings, matched to exact Discogs pressings and ranked by landed cost versus sold median.';
+  } else if (tradera) {
+    $('view-eyebrow').textContent = gems ? 'TRADERA RARITY WATCH' : 'TRADERA × YOUR WANTLIST';
+    $('view-title').textContent = gems ? 'Wanted records newly available on Tradera' : 'Tradera deals worth opening';
+    $('view-intro').textContent = gems ? 'An official Tradera API search found no matching fixed-price pressing, then a verified copy appeared.' : 'Fixed-price Tradera listings, pressing-matched to Discogs and converted from SEK with the ECB daily rate.';
+  } else {
+    $('view-eyebrow').textContent = city ? 'DIG THE CITY' : (scout ? 'BEYOND YOUR WANTLIST' : (gems ? 'RARITY WATCH' : 'YOUR WANTLIST'));
+    $('view-title').textContent = city ? 'Antwerp record stores, one inventory at a time' : (scout ? 'Scout valuable records you may be missing' : (gems ? 'Rare records that just surfaced' : 'Deals worth opening'));
+    $('view-intro').textContent = city ? 'See every mapped shop for free, then load the first 100 vinyl listings from every connected Discogs seller in the city.' : (scout ? 'Search Discogs by style or genre, filter on estimated VG+ value, and add promising pressings straight to your wantlist.' : (gems ? 'First copies after a release was unavailable — price is context, availability is the signal.' : 'Verified copies ranked by total value, so the strongest opportunities stay on top.'));
+  }
   $('search').placeholder = city ? 'Search loaded store inventory' : (gems ? 'Search rare records' : 'Search artist or release');
+}
+
+function until(ts) {
+  const seconds = Math.max(0, Math.ceil((Number(ts) - Date.now()) / 1000));
+  if (seconds < 60) return `in ${seconds}s`;
+  if (seconds < 3600) return `in ${Math.ceil(seconds / 60)}m`;
+  return `in ${Math.ceil(seconds / 3600)}h`;
 }
 
 // "No longer listed" means exactly that: the release has NO copies for sale right now — not merely
@@ -275,7 +320,7 @@ let verifyBusy = false;
 let goneHistoryOpen = false; // remember the <details> state across re-renders
 
 async function maybeVerify() {
-  if (!hasApi || scanning || verifyBusy) return;
+  if (activePlatform !== 'discogs' || !hasApi || scanning || verifyBusy) return;
   // In the (default) scan view the deal cards are already live/condition-verified by the scan
   // itself — only the 💎 gems need the live check. Cloud deal cards (if that view is ever shown)
   // get the full treatment.
@@ -293,6 +338,7 @@ async function maybeVerify() {
 }
 
 function applyVerify(results) {
+  if (activePlatform !== 'discogs') return; // a platform switch may happen while the async verification is in flight
   // Scan deals are already live data — never overwrite them with a (release-level) verify result;
   // only cloud alert cards get upgraded. Gems are handled below in every view.
   if (viewMode === 'cloud') allDeals = allDeals.map((d) => {
@@ -361,6 +407,13 @@ function enrich(d) {
 // listing (green ✓ when VG+ or better) — the certainty the user asked for. For an unconfirmed
 // (cloud/API) deal it falls back to the old price-proxy ESTIMATE (≈), clearly marked as a guess.
 function conditionChip(d) {
+  if (d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera') {
+    const condition = d.itemCondition ? ` · ${esc(d.itemCondition)}` : '';
+    const evidence = Array.isArray(d.pressingEvidence) && d.pressingEvidence.length
+      ? ` Evidence: ${d.pressingEvidence.join(', ')}.` : '';
+    const source = d.platform === 'ebay' ? 'eBay' : (d.platform === 'tradera' ? 'Tradera' : 'Vinted');
+    return `<span class="tag good" title="Matched to a concrete Discogs pressing from ${source}.${esc(evidence)} Media grade is not verified.">✓ pressing matched${condition}</span>`;
+  }
   if (d.conditionConfirmed && d.mediaCondition) {
     const g = gradeShort(d.mediaCondition);
     const ok = isVgPlus(d);
@@ -425,10 +478,11 @@ function listingHistoryTags(d) {
 
 function card(d) {
   const fresh = d.freshListing ? `<span class="tag fresh">🆕 just listed</span>` : '';
-  const isHidden = dismissed.has(String(d.releaseId));
+  const dismissKey = `${d.platform || activePlatform}:${d.releaseId}`;
+  const isHidden = dismissed.has(dismissKey) || (d.platform === 'discogs' && dismissed.has(String(d.releaseId)));
   const dismissBtn = isHidden
-    ? `<button class="dismiss restore" data-rid="${esc(String(d.releaseId))}" title="Restore this deal">↩</button>`
-    : `<button class="dismiss" data-rid="${esc(String(d.releaseId))}" title="Hide this deal">×</button>`;
+    ? `<button class="dismiss restore" data-rid="${esc(dismissKey)}" title="Restore this deal">↩</button>`
+    : `<button class="dismiss" data-rid="${esc(dismissKey)}" title="Hide this deal">×</button>`;
   const spark = sparkline(d.spark);
   const priceHistory = priceHistoryDisplay(d);
   const historyTags = listingHistoryTags(d);
@@ -439,12 +493,15 @@ function card(d) {
   // Shipping line. A scan-confirmed copy carries the REAL shipping Discogs charges to ship to us
   // (shown plainly, no "est."); a cloud/unconfirmed deal has no per-copy shipping, so it falls back
   // to the slider estimate — clearly marked "(est.)" so the two are never confused.
-  const itemTxt = `${money(d.lowest, d.currency)} item`;
+  const itemTxt = (d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera') && d.itemPrice != null
+    ? `${money(d.itemPrice, d.currency)} item${d.serviceFee ? ` + ${money(d.serviceFee, d.currency)} buyer protection` : ''}`
+    : `${money(d.lowest, d.currency)} item`;
+  const shippingLabel = d.importCharges > 0 ? 'delivery/import' : 'shipping';
   const shipNote = d._shipReal
-    ? (d._ship > 0 ? `${itemTxt} + ${money(d._ship, d.currency)} shipping` : `${itemTxt} · free shipping`)
+    ? (d._ship > 0 ? `${itemTxt} + ${money(d._ship, d.currency)} ${shippingLabel}` : `${itemTxt} · free shipping`)
     : (d._ship > 0 ? `${itemTxt} + ${money(d._ship, d.currency)} shipping (est.)` : `${itemTxt} · shipping unknown`);
   const shipTitle = d._shipReal
-    ? (d.shippingSource === 'base' ? 'Real shipping (seller&#39;s flat rate, from the live listing)' : 'Real shipping to your location, from the live listing')
+    ? (d.shippingSource === 'base' ? 'Real shipping (seller&#39;s flat rate, from the live listing)' : (d.shippingSource === 'ebay-api' ? 'Delivery and import charges returned by the official eBay Browse API' : 'Real shipping to your location, from the live listing'))
     : 'Estimated shipping (slider) — this deal has no per-copy shipping; run ⚡ Full scan for the real amount';
   const save = d._savings != null ? ` · save ${money(d._savings, d.currency)}` : '';
   const forSale = d.vgPlusCount != null
@@ -458,13 +515,15 @@ function card(d) {
   // Slightly-dearer-but-better-grade alternative.
   const alt = (d.altGrade && d.altPrice != null)
     ? `<div class="note">↑ or ${money(d.altPrice, d.currency)} for a ${esc(gradeShort(d.altGrade))} copy${d.altUrl ? ` <a class="altlink" data-url="${esc(d.altUrl)}" href="#">view</a>` : ''}</div>` : '';
-  const buyLabel = d.listingUrl ? 'Buy this copy on Discogs &rarr;' : 'View &amp; buy on Discogs &rarr;';
+  const buyLabel = d.platform === 'vinted'
+    ? 'Open this listing on Vinted &rarr;'
+    : (d.platform === 'ebay' ? 'Open this listing on eBay &rarr;' : (d.platform === 'tradera' ? 'Open this listing on Tradera &rarr;' : (d.listingUrl ? 'Buy this copy on Discogs &rarr;' : 'View &amp; buy on Discogs &rarr;')));
   // The alerted price is gone from the marketplace — state the fact, no guessing about why.
   const gone = d._gone
     ? `<span class="tag gone" title="The cloud watcher's latest check shows this price is no longer on the marketplace">⌛ no longer listed — ${d.current && d.current.lowest != null ? `cheapest is now ${money(d.current.lowest, d.currency)}` : 'no copies for sale'}</span>` : '';
   return `<article class="card${d.freshListing ? ' is-fresh' : ''}${d.conditionConfirmed ? ' is-verified' : ''}${isHidden ? ' is-hidden' : ''}${d._gone ? ' is-gone' : ''}">
     ${dismissBtn}
-    <span class="when">${viewMode === 'scan' ? 'live' : ago(d.ts)}</span>
+    <span class="when">${d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera' ? ago(d.ts) : (viewMode === 'scan' ? 'live' : ago(d.ts))}</span>
     ${thumb}
     <div class="body">
       <p class="title">${esc(d.title || 'Release ' + d.releaseId)}</p>
@@ -562,12 +621,18 @@ function gemCard(g) {
   // Live verification (same pipeline as the deals): still for sale, and in what condition?
   // A gone gem gets a full-width banner, not a subtle tag — a sold/delisted copy must never
   // look buyable at a glance (gone comes from the scan history AND the live verify).
-  const live = !g.gone && g.verified && g.currentMedia
+  const live = g.platform === 'discogs' && !g.gone && g.verified && g.currentMedia
     ? `<span class="tag good" title="Confirmed from the live marketplace listing">✓ media ${esc(gradeShort(g.currentMedia))}${g.currentLowest != null && g.currentLowest !== g.lowest ? ` · now ${money(g.currentLowest, g.currency)}` : ''}</span>`
     : '';
   const goneBanner = g.gone
     ? `<div class="gem-gone-banner" title="No copy is for sale anymore — it was sold or the seller delisted it">⌛ NO LONGER LISTED — sold or delisted</div>`
     : '';
+  const gemSignal = g.platform === 'vinted'
+    ? '💎 absent in a targeted search — now surfaced'
+    : (g.platform === 'ebay' ? '💎 absent on eBay — now surfaced' : (g.platform === 'tradera' ? '💎 absent on Tradera — now surfaced' : `💎 was 0 for sale — ${appeared}`));
+  const buyLabel = g.platform === 'vinted'
+    ? 'Open this listing on Vinted &rarr;'
+    : (g.platform === 'ebay' ? 'Open this listing on eBay &rarr;' : (g.platform === 'tradera' ? 'Open this listing on Tradera &rarr;' : (g.gone ? 'View release on Discogs &rarr;' : 'View &amp; buy on Discogs &rarr;')));
   return `<article class="card is-gem${g.gone ? ' is-gone' : ''}">
     <span class="when">${g.ts ? ago(g.ts) : ''}</span>
     ${thumb}
@@ -575,21 +640,24 @@ function gemCard(g) {
       <p class="title">${esc(g.title || 'Release ' + g.releaseId)}</p>
       <p class="artist">${esc(g.artist || '')}${g.year ? ` · ${esc(String(g.year))}` : ''}</p>
       ${goneBanner}
-      <div class="meta"><span class="tag gem">💎 was 0 for sale — ${appeared}</span>${live}</div>
-      <div class="price-row"><span class="price gem-price">${money(g.lowest, g.currency)}</span><span class="gem-ask">${g.gone ? 'was asking — gone now' : 'asking price — unfiltered'}</span></div>
+      <div class="meta"><span class="tag gem">${gemSignal}</span>${live}</div>
+      <div class="price-row"><span class="price gem-price">${money(g.lowest, g.currency)}</span><span class="gem-ask">${g.gone ? 'was asking — gone now' : (g.platform === 'vinted' ? 'at detection — open to verify' : (g.platform === 'ebay' ? 'item price from eBay API' : (g.platform === 'tradera' ? 'fixed price converted from SEK' : 'asking price — unfiltered')))}</span></div>
       ${ref}
-      <button class="buy gembuy" data-url="${esc(g.url)}">${g.gone ? 'View release on Discogs &rarr;' : 'View &amp; buy on Discogs &rarr;'}</button>
+      <button class="buy gembuy" data-url="${esc(g.url)}">${buyLabel}</button>
     </div>
   </article>`;
 }
 
 function zwRow(r) {
   const name = `${r.artist ? r.artist + ' – ' : ''}${r.title || 'Release ' + r.releaseId}`;
+  const targetUrl = activePlatform === 'vinted'
+    ? (r.url || `https://www.vinted.nl/catalog?search_text=${encodeURIComponent(`${r.artist || ''} ${r.title || ''}`.trim())}&catalog_ids=3041`)
+    : (activePlatform === 'ebay' ? (r.url || `https://www.ebay.nl/sch/i.html?_nkw=${encodeURIComponent(`${r.artist || ''} ${r.title || ''} vinyl`.trim())}`) : (activePlatform === 'tradera' ? (r.url || `https://www.tradera.com/search?q=${encodeURIComponent(`${r.artist || ''} ${r.title || ''} vinyl`.trim())}`) : `https://www.discogs.com/release/${r.releaseId}`));
   return `<div class="zw-row">
     <span class="zw-dot"></span>
     <span class="zw-title" title="${esc(name)}">${esc(name)}</span>
     ${r.year ? `<span class="zw-year">${esc(String(r.year))}</span>` : ''}
-    <a class="zw-link" data-url="${esc('https://www.discogs.com/release/' + r.releaseId)}" href="#">view</a>
+    <a class="zw-link" data-url="${esc(targetUrl)}" href="#">view</a>
   </div>`;
 }
 
@@ -608,20 +676,26 @@ function renderGems() {
     empty.classList.remove('hidden');
     empty.textContent = q
       ? 'Nothing on the Rare tab matches your search.'
-      : 'No rare gems yet. Once your wantlist has been swept, releases with ZERO copies for sale are watched here — and the moment the first copy appears it shows up (and lands in your inbox), whatever the price.';
+      : (activePlatform === 'vinted'
+          ? 'No Vinted rare gems yet. Deep Hunt confirms titles with no matching listing one by one; when one later appears, it surfaces here.'
+          : (activePlatform === 'ebay'
+              ? 'No eBay rare gems yet. Once the API has confirmed a pressing has no matching listing, its next appearance surfaces here.'
+              : (activePlatform === 'tradera'
+                  ? 'No Tradera rare gems yet. Once the API has confirmed a pressing has no matching fixed-price listing, its next appearance surfaces here.'
+                  : 'No rare gems yet. Once your wantlist has been swept, releases with ZERO copies for sale are watched here — and the moment the first copy appears it shows up (and lands in your inbox), whatever the price.')));
     return;
   }
   empty.classList.add('hidden');
 
   let html = '';
   if (gems.length) {
-    html += `<div class="gems-head">💎 Rare appearances — the first copy showed up after none at all</div>`;
+    html += `<div class="gems-head">💎 Rare appearances — ${activePlatform === 'vinted' ? 'a matching Vinted listing surfaced after a confirmed empty search' : (activePlatform === 'ebay' ? 'a matching eBay listing surfaced after a confirmed empty API search' : (activePlatform === 'tradera' ? 'a matching fixed-price Tradera listing surfaced after a confirmed empty API search' : 'the first copy showed up after none at all'))}</div>`;
     html += gems.map(gemCard).join('');
   } else if (!q) {
     html += `<div class="gems-head muted">💎 No rare appearances yet — the list below is being watched. The moment a first copy shows up it lands here and in your inbox, whatever the price.</div>`;
   }
   if (zw.length) {
-    html += `<div class="zw-head">👁 Watching ${zw.length} wantlist release${zw.length === 1 ? '' : 's'} with <b>0 copies for sale</b> — the moment one appears it alerts, at any price</div>`;
+    html += `<div class="zw-head">👁 Watching ${zw.length} wantlist release${zw.length === 1 ? '' : 's'} with <b>no matching ${activePlatform === 'vinted' ? 'Vinted listing' : (activePlatform === 'ebay' ? 'eBay listing' : (activePlatform === 'tradera' ? 'fixed-price Tradera listing' : 'copies for sale'))}</b> — the moment one appears it alerts, at any price</div>`;
     html += `<div class="zw-list">${zw.map(zwRow).join('')}</div>`;
   }
   wrap.innerHTML = html;
@@ -657,13 +731,24 @@ function notifyNewGems(gems) {
 }
 
 async function refreshGems() {
-  if (!hasApi) { gemsData = DEMO_GEMS; updateGemsBadge(); if (activeTab === 'gems') render(); return; }
+  if (activePlatform === 'vinted') { await refreshVintedSnapshot(); return; }
+  if (activePlatform === 'ebay') { await refreshEbaySnapshot(); return; }
+  if (activePlatform === 'tradera') { await refreshTraderaSnapshot(); return; }
+  if (!hasApi) {
+    platformViews.discogs.gems = DEMO_GEMS;
+    if (activePlatform === 'discogs') { gemsData = DEMO_GEMS; updateGemsBadge(); if (activeTab === 'gems') render(); }
+    return;
+  }
   try {
-    gemsData = normalizeGems(await window.api.getGems());
-    notifyNewGems(gemsData.gems);
-    updateGemsBadge();
-    if (activeTab === 'gems') render();
-    maybeVerify(); // gems join the same live listings check (cached in main, usually free)
+    const nextGems = normalizeGems(await window.api.getGems());
+    platformViews.discogs.gems = nextGems;
+    notifyNewGems(nextGems.gems);
+    if (activePlatform === 'discogs') {
+      gemsData = nextGems;
+      updateGemsBadge();
+      if (activeTab === 'gems') render();
+      maybeVerify(); // gems join the same live listings check (cached in main, usually free)
+    }
   } catch { /* keep the last known gems — the deals path surfaces connectivity problems */ }
 }
 
@@ -1143,7 +1228,301 @@ function onCityDigProgress(message) {
   else if (message.phase === 'done') $('city-status').textContent = `Done · ${message.found} vinyl listings loaded${message.aborted ? ' (stopped early)' : ''}`;
 }
 
+function stashPlatformView() {
+  const view = platformViews[activePlatform];
+  view.deals = allDeals;
+  view.nearMisses = allNearMisses;
+  view.gems = gemsData;
+  view.viewMode = viewMode;
+  view.scannedOnce = scannedOnce;
+}
+
+function restorePlatformView(platform) {
+  const view = platformViews[platform];
+  allDeals = view.deals || [];
+  allNearMisses = view.nearMisses || [];
+  gemsData = view.gems || { ts: null, gems: [], zeroWatch: [] };
+  viewMode = view.viewMode || (platform === 'discogs' ? 'scan' : platform);
+  scannedOnce = !!view.scannedOnce;
+  enrichCache = { src: null, ship: null, list: [] };
+}
+
+function normalizeVintedSnapshot(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  const status = input.status && typeof input.status === 'object' ? input.status : {};
+  const backfill = status.backfill && typeof status.backfill === 'object' ? status.backfill : {};
+  return {
+    status: {
+      enabled: !!status.enabled,
+      running: !!status.running,
+      health: status.health || (status.enabled ? 'idle' : 'disabled'),
+      lastPollAt: status.lastPollAt || null,
+      nextPollAt: status.nextPollAt || null,
+      pollSeconds: Number(status.pollSeconds) || 15,
+      targetCount: Number(status.targetCount) || 0,
+      requestsLastHour: Number(status.requestsLastHour) || 0,
+      message: status.message || null,
+      error: status.error || null,
+      backfill: {
+        active: !!backfill.active,
+        cursor: Math.max(0, Number(backfill.cursor) || 0),
+        checked: Math.max(0, Number(backfill.checked) || 0),
+        total: Math.max(0, Number(backfill.total) || 0),
+        listingsFound: Math.max(0, Number(backfill.listingsFound) || 0),
+        dealsFound: Math.max(0, Number(backfill.dealsFound) || 0),
+        gemsFound: Math.max(0, Number(backfill.gemsFound) || 0),
+        startedAt: backfill.startedAt || null,
+        completedAt: backfill.completedAt || null,
+        cancelledAt: backfill.cancelledAt || null,
+      },
+    },
+    deals: Array.isArray(input.deals) ? input.deals : [],
+    gems: normalizeGems(input.gems),
+  };
+}
+
+function renderVintedStatus() {
+  const s = vintedStatus || {};
+  const backfill = s.backfill || {};
+  $('vinted-enabled').checked = !!s.enabled;
+  if ([...$('vinted-poll-interval').options].some((option) => Number(option.value) === Number(s.pollSeconds))) {
+    $('vinted-poll-interval').value = String(s.pollSeconds);
+  }
+  const health = $('vinted-health');
+  const paused = s.health === 'paused' || s.health === 'backoff';
+  health.className = 'vinted-health ' + (s.health === 'error' ? 'is-error' : (paused ? 'is-paused' : (s.running || backfill.active ? 'is-scanning' : (s.health === 'live' ? 'is-live' : 'is-idle'))));
+  $('vinted-health-label').textContent = s.health === 'error' ? 'Error' : (paused ? 'Paused' : (backfill.active ? (s.running ? 'Backfilling' : 'Backfill queued') : (s.running ? 'Scanning' : (s.health === 'live' ? 'Live' : (s.enabled ? 'Ready' : 'Off')))));
+  $('vinted-last-scan').textContent = s.lastPollAt ? ago(s.lastPollAt) : 'Not yet';
+  $('vinted-next-scan').textContent = (s.enabled || backfill.active) && s.nextPollAt ? until(s.nextPollAt) : '—';
+  const total = backfill.total || s.targetCount || 0;
+  $('vinted-backfill-progress').textContent = backfill.active
+    ? `${backfill.checked}/${total || '?'} · ${backfill.listingsFound} listing${backfill.listingsFound === 1 ? '' : 's'} · ${backfill.dealsFound} deal${backfill.dealsFound === 1 ? '' : 's'}`
+    : (backfill.completedAt
+        ? `Complete · ${backfill.checked}/${total || backfill.checked} · ${backfill.dealsFound} deal${backfill.dealsFound === 1 ? '' : 's'}`
+        : (backfill.cancelledAt ? `Paused · ${backfill.checked}/${total || '?'}` : 'Not started'));
+  const backfillButton = $('vinted-backfill');
+  backfillButton.classList.toggle('is-active', !!backfill.active);
+  backfillButton.textContent = backfill.active
+    ? 'Stop existing scan'
+    : (backfill.cancelledAt && backfill.checked < total ? 'Resume existing scan' : (backfill.completedAt ? 'Scan existing again' : 'Scan existing listings'));
+  const requests = `${Number(s.requestsLastHour) || 0} request${Number(s.requestsLastHour) === 1 ? '' : 's'} this session (last-hour window)`;
+  $('vinted-status-message').textContent = s.error
+    || (s.message ? `${s.message} ${requests}.` : (s.enabled ? `Sniper armed · ${requests}. Deep Hunt checks older matches separately.` : 'Enable the sniper when you are ready to watch new listings.'));
+  $('vinted-scan-now').disabled = !!s.running;
+}
+
+function notifyVinted(items, kind = 'deal') {
+  if (!Array.isArray(items) || !items.length || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const item = items[0];
+  const extra = items.length > 1 ? ` (+${items.length - 1} more)` : '';
+  const title = kind === 'gem'
+    ? `💎 Vinted rare gem: ${item.artist || ''} – ${item.title || ''}`
+    : `💸 Vinted deal: ${money(item.lowest, item.currency)} (${pct(item.discount)} off)`;
+  const body = kind === 'gem'
+    ? `A matching listing surfaced after an empty search at ${money(item.lowest, item.currency)}${extra}`
+    : `${item.artist || ''} – ${item.title || ''}${extra}`;
+  const notification = new Notification(title, { body });
+  notification.onclick = () => { openUrl(item.url); window.focus(); };
+}
+
+function applyVintedSnapshot(value, { notify = false } = {}) {
+  const next = normalizeVintedSnapshot(value);
+  vintedStatus = next.status;
+  platformViews.vinted.deals = next.deals;
+  platformViews.vinted.gems = next.gems;
+  platformViews.vinted.nearMisses = [];
+  platformViews.vinted.viewMode = 'vinted';
+  platformViews.vinted.scannedOnce = !!next.status.lastPollAt;
+  if (activePlatform === 'vinted') restorePlatformView('vinted');
+  renderVintedStatus();
+  updateGemsBadge();
+  if (activePlatform === 'vinted') render();
+  if (notify && value) {
+    notifyVinted(value.newDeals, 'deal');
+    notifyVinted(value.newGems, 'gem');
+  }
+}
+
+async function refreshVintedSnapshot() {
+  if (!hasApi || !window.api.vintedSnapshot || vintedRefreshBusy) return;
+  vintedRefreshBusy = true;
+  try { applyVintedSnapshot(await window.api.vintedSnapshot()); }
+  catch (error) {
+    vintedStatus = { ...vintedStatus, health: 'error', error: error && error.message ? error.message : String(error) };
+    renderVintedStatus();
+  } finally { vintedRefreshBusy = false; }
+}
+
+function normalizeEbaySnapshot(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  const status = input.status && typeof input.status === 'object' ? input.status : {};
+  const progress = status.progress && typeof status.progress === 'object' ? status.progress : null;
+  return {
+    status: {
+      enabled: !!status.enabled,
+      configured: !!status.configured,
+      running: !!status.running,
+      health: status.health || (status.configured ? 'idle' : 'setup'),
+      pollMinutes: Number(status.pollMinutes) || 15,
+      lastPollAt: status.lastPollAt || null,
+      nextPollAt: status.nextPollAt || null,
+      callsToday: Math.max(0, Number(status.callsToday) || 0),
+      dailyLimit: Math.max(1, Number(status.dailyLimit) || 4800),
+      targetCount: Math.max(0, Number(status.targetCount) || 0),
+      progress,
+      message: status.message || null,
+      error: status.error || null,
+    },
+    deals: Array.isArray(input.deals) ? input.deals : [],
+    gems: normalizeGems(input.gems),
+  };
+}
+
+function renderEbayStatus() {
+  const s = ebayStatus || {};
+  $('ebay-enabled').checked = !!s.enabled;
+  if ([...$('ebay-poll-interval').options].some((option) => Number(option.value) === Number(s.pollMinutes))) $('ebay-poll-interval').value = String(s.pollMinutes);
+  const health = $('ebay-health');
+  health.className = 'vinted-health ' + (s.health === 'error' ? 'is-error' : (s.running ? 'is-scanning' : (s.health === 'live' ? 'is-live' : (s.configured ? 'is-idle' : 'is-paused'))));
+  $('ebay-health-label').textContent = s.health === 'error' ? 'Error' : (s.running ? 'Scanning' : (s.health === 'live' ? 'Live' : (s.configured ? (s.enabled ? 'Ready' : 'Connected') : 'Setup needed')));
+  $('ebay-last-scan').textContent = s.lastPollAt ? ago(s.lastPollAt) : 'Not yet';
+  $('ebay-next-scan').textContent = s.enabled && s.nextPollAt ? until(s.nextPollAt) : '—';
+  $('ebay-api-calls').textContent = `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 4800).toLocaleString()}`;
+  const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
+  $('ebay-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official Browse API ready.' : 'Add your eBay developer credentials to connect the official API.')}`;
+  $('ebay-scan-now').disabled = !!s.running || !s.configured;
+  $('ebay-enabled').disabled = !s.configured;
+}
+
+function notifyEbay(items, kind = 'deal') {
+  if (!Array.isArray(items) || !items.length || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const item = items[0]; const extra = items.length > 1 ? ` (+${items.length - 1} more)` : '';
+  const title = kind === 'gem' ? `💎 eBay rare gem: ${item.artist || ''} – ${item.title || ''}` : `💸 eBay deal: ${money(item.lowest, item.currency)} (${pct(item.discount)} off)`;
+  const notification = new Notification(title, { body: `${item.artist || ''} – ${item.title || ''}${extra}` });
+  notification.onclick = () => { openUrl(item.url); window.focus(); };
+}
+
+function applyEbaySnapshot(value, { notify = false } = {}) {
+  const next = normalizeEbaySnapshot(value);
+  ebayStatus = next.status;
+  platformViews.ebay = { deals: next.deals, nearMisses: [], gems: next.gems, viewMode: 'ebay', scannedOnce: !!next.status.lastPollAt };
+  if (activePlatform === 'ebay') restorePlatformView('ebay');
+  renderEbayStatus(); updateGemsBadge();
+  if (activePlatform === 'ebay') render();
+  if (notify && value) { notifyEbay(value.newDeals, 'deal'); notifyEbay(value.newGems, 'gem'); }
+}
+
+async function refreshEbaySnapshot() {
+  if (!hasApi || !window.api.ebaySnapshot || ebayRefreshBusy) return;
+  ebayRefreshBusy = true;
+  try { applyEbaySnapshot(await window.api.ebaySnapshot()); }
+  catch (error) { ebayStatus = { ...ebayStatus, health: 'error', error: error && error.message ? error.message : String(error) }; renderEbayStatus(); }
+  finally { ebayRefreshBusy = false; }
+}
+
+function normalizeTraderaSnapshot(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  const status = input.status && typeof input.status === 'object' ? input.status : {};
+  const progress = status.progress && typeof status.progress === 'object' ? status.progress : null;
+  return {
+    status: {
+      enabled: !!status.enabled,
+      configured: !!status.configured,
+      running: !!status.running,
+      health: status.health || (status.configured ? 'idle' : 'setup'),
+      pollMinutes: Number(status.pollMinutes) || 30,
+      lastPollAt: status.lastPollAt || null,
+      nextPollAt: status.nextPollAt || null,
+      callsToday: Math.max(0, Number(status.callsToday) || 0),
+      dailyLimit: Math.max(1, Number(status.dailyLimit) || 9500),
+      targetCount: Math.max(0, Number(status.targetCount) || 0),
+      progress,
+      fx: status.fx && typeof status.fx === 'object' ? status.fx : null,
+      message: status.message || null,
+      error: status.error || null,
+    },
+    deals: Array.isArray(input.deals) ? input.deals : [],
+    gems: normalizeGems(input.gems),
+  };
+}
+
+function renderTraderaStatus() {
+  const s = traderaStatus || {};
+  $('tradera-enabled').checked = !!s.enabled;
+  if ([...$('tradera-poll-interval').options].some((option) => Number(option.value) === Number(s.pollMinutes))) $('tradera-poll-interval').value = String(s.pollMinutes);
+  const health = $('tradera-health');
+  health.className = 'vinted-health ' + (s.health === 'error' ? 'is-error' : (s.running ? 'is-scanning' : (s.health === 'live' ? 'is-live' : (s.configured ? 'is-idle' : 'is-paused'))));
+  $('tradera-health-label').textContent = s.health === 'error' ? 'Error' : (s.running ? 'Scanning' : (s.health === 'live' ? 'Live' : (s.configured ? (s.enabled ? 'Ready' : 'Connected') : 'Setup needed')));
+  $('tradera-last-scan').textContent = s.lastPollAt ? ago(s.lastPollAt) : 'Not yet';
+  $('tradera-next-scan').textContent = s.enabled && s.nextPollAt ? until(s.nextPollAt) : '—';
+  $('tradera-api-calls').textContent = `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 9500).toLocaleString()}`;
+  const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
+  const fx = s.fx && Number(s.fx.rate) > 0 ? ` SEK→${s.fx.to} via ${s.fx.source === 'identity' ? 'identity' : 'ECB'}${s.fx.stale ? ' (cached)' : ''}.` : '';
+  $('tradera-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official REST v4 ready.' : 'Add your Tradera developer credentials to connect the official API.')}${fx}`;
+  $('tradera-scan-now').disabled = !!s.running || !s.configured;
+  $('tradera-enabled').disabled = !s.configured;
+}
+
+function notifyTradera(items, kind = 'deal') {
+  if (!Array.isArray(items) || !items.length || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const item = items[0]; const extra = items.length > 1 ? ` (+${items.length - 1} more)` : '';
+  const title = kind === 'gem' ? `💎 Tradera rare gem: ${item.artist || ''} – ${item.title || ''}` : `💸 Tradera deal: ${money(item.lowest, item.currency)} (${pct(item.discount)} off)`;
+  const notification = new Notification(title, { body: `${item.artist || ''} – ${item.title || ''}${extra}` });
+  notification.onclick = () => { openUrl(item.url); window.focus(); };
+}
+
+function applyTraderaSnapshot(value, { notify = false } = {}) {
+  const next = normalizeTraderaSnapshot(value);
+  traderaStatus = next.status;
+  platformViews.tradera = { deals: next.deals, nearMisses: [], gems: next.gems, viewMode: 'tradera', scannedOnce: !!next.status.lastPollAt };
+  if (activePlatform === 'tradera') restorePlatformView('tradera');
+  renderTraderaStatus(); updateGemsBadge();
+  if (activePlatform === 'tradera') render();
+  if (notify && value) { notifyTradera(value.newDeals, 'deal'); notifyTradera(value.newGems, 'gem'); }
+}
+
+async function refreshTraderaSnapshot() {
+  if (!hasApi || !window.api.traderaSnapshot || traderaRefreshBusy) return;
+  traderaRefreshBusy = true;
+  try { applyTraderaSnapshot(await window.api.traderaSnapshot()); }
+  catch (error) { traderaStatus = { ...traderaStatus, health: 'error', error: error && error.message ? error.message : String(error) }; renderTraderaStatus(); }
+  finally { traderaRefreshBusy = false; }
+}
+
+async function setPlatform(platform) {
+  const next = ['discogs', 'vinted', 'ebay', 'tradera'].includes(platform) ? platform : 'discogs';
+  if (next !== activePlatform) {
+    stashPlatformView();
+    activePlatform = next;
+    try { localStorage.setItem('deal-shark-platform', next); } catch { /* best effort */ }
+  }
+  if (activePlatform !== 'discogs' && (activeTab === 'scout' || activeTab === 'city')) activeTab = 'deals';
+  restorePlatformView(activePlatform);
+  document.body.classList.toggle('platform-vinted', activePlatform === 'vinted');
+  document.body.classList.toggle('platform-ebay', activePlatform === 'ebay');
+  document.body.classList.toggle('platform-tradera', activePlatform === 'tradera');
+  $('platform-select').value = activePlatform;
+  $('platform-context-label').textContent = activePlatform === 'vinted'
+    ? 'Anonymous newest-listings feed · matching and history stay on this PC'
+    : (activePlatform === 'ebay' ? 'Official Browse API · exact pressing match · landed-cost comparison' : (activePlatform === 'tradera' ? 'Official REST v4 · fixed price only · ECB currency conversion' : 'Wantlist, sold medians and connected sellers'));
+  $('vinted-panel').classList.toggle('hidden', activePlatform !== 'vinted');
+  $('ebay-panel').classList.toggle('hidden', activePlatform !== 'ebay');
+  $('tradera-panel').classList.toggle('hidden', activePlatform !== 'tradera');
+  $('btn-fullscan').querySelector('span').textContent = activePlatform === 'vinted' ? 'Scan Vinted' : (activePlatform === 'ebay' ? 'Scan eBay' : (activePlatform === 'tradera' ? 'Scan Tradera' : 'Scan wantlist'));
+  $('btn-fullscan').title = activePlatform === 'vinted' ? 'Check the Vinted newest feed now'
+    : (activePlatform === 'ebay' ? 'Search the official eBay Browse API for every wantlist pressing' : (activePlatform === 'tradera' ? 'Search the official Tradera REST API for every wantlist pressing' : 'Scan the full wantlist with real condition, shipping and fresh sold medians'));
+  $('vgPlusOnly').closest('.switch-row').classList.toggle('hidden', activePlatform !== 'discogs');
+  $('showNearMiss').closest('.switch-row').classList.toggle('hidden', activePlatform !== 'discogs');
+  updateGemsBadge();
+  setTab(activeTab);
+  if (activePlatform === 'vinted') await refreshVintedSnapshot();
+  else if (activePlatform === 'ebay') await refreshEbaySnapshot();
+  else if (activePlatform === 'tradera') await refreshTraderaSnapshot();
+  else { refreshGems(); render(); }
+}
+
 function setTab(tab) {
+  if (activePlatform !== 'discogs' && (tab === 'scout' || tab === 'city')) tab = 'deals';
   activeTab = tab;
   document.body.classList.toggle('tab-gems', tab === 'gems');
   document.body.classList.toggle('tab-scout', tab === 'scout');
@@ -1174,10 +1553,11 @@ function applyFilters(deals, opts = {}) {
   const maxT = parseFloat($('maxTotal').value) || 0;
   const freshOnly = $('freshOnly').checked;
   // opts.ignoreVg lets render() count how many deals are removed SOLELY by "VG+ only".
-  const vgOnly = opts.ignoreVg ? false : $('vgPlusOnly').checked;
+  const vgOnly = activePlatform !== 'discogs' ? false : (opts.ignoreVg ? false : $('vgPlusOnly').checked);
   const showHidden = $('showHidden').checked;
   return deals.filter((d) => {
-    if (!showHidden && dismissed.has(String(d.releaseId))) return false;
+    const dismissKey = `${d.platform || activePlatform}:${d.releaseId}`;
+    if (!showHidden && (dismissed.has(dismissKey) || (d.platform === 'discogs' && dismissed.has(String(d.releaseId))))) return false;
     if (minV > 0 && (d.reference == null || d.reference < minV)) return false;
     if ((d._eff ?? 0) < minD) return false;
     if (maxT > 0 && (d._total == null || d._total > maxT)) return false;
@@ -1218,7 +1598,7 @@ function render() {
   // How many deals pass every OTHER filter but are removed SOLELY by "VG+ only"? Cloud/email deals
   // can never carry a confirmed grade, so "VG+ only" silently hides every one of them — which is
   // exactly why a deal you were emailed can be invisible here. Surface the number so it's never silent.
-  const vgHidden = $('vgPlusOnly').checked ? Math.max(0, applyFilters(enriched, { ignoreVg: true }).length - deals.length) : 0;
+  const vgHidden = activePlatform === 'discogs' && $('vgPlusOnly').checked ? Math.max(0, applyFilters(enriched, { ignoreVg: true }).length - deals.length) : 0;
   deals = sortDeals(deals, $('sortBy').value);
   // Cards whose price no longer exists on the marketplace are history, not deals: they move to a
   // collapsed section at the bottom instead of sitting (struck-through) between the live cards.
@@ -1229,12 +1609,16 @@ function render() {
   const misses = showMiss ? filterNearMisses(allNearMisses) : [];
   const wrap = $('deals');
   const empty = $('empty');
-  const hiddenCount = allDeals.reduce((acc, d) => acc + (dismissed.has(String(d.releaseId)) ? 1 : 0), 0);
+  const hiddenCount = allDeals.reduce((acc, d) => {
+    const key = `${d.platform || activePlatform}:${d.releaseId}`;
+    return acc + ((dismissed.has(key) || (d.platform === 'discogs' && dismissed.has(String(d.releaseId)))) ? 1 : 0);
+  }, 0);
   const hiddenNote = hiddenCount ? ` · ${hiddenCount} hidden` : '';
   const vgNote = vgHidden ? ` · ${vgHidden} hidden by “VG+ only”` : '';
   $('pill-deals').textContent = `${allDeals.length} deal${allDeals.length === 1 ? '' : 's'}`;
-  const verifyNote = verifyInfo.running ? ` · ✓ checking listings ${Math.min(verifyInfo.done + 1, verifyInfo.total)}/${verifyInfo.total}…` : '';
-  $('resultCount').textContent = (deals.length || verifyNote) ? `${deals.length} of ${allDeals.length}${hiddenNote}${vgNote}${viewMode === 'scan' ? ' · live scan' : ''}${verifyNote}` : '';
+  const verifyNote = activePlatform === 'discogs' && verifyInfo.running ? ` · ✓ checking listings ${Math.min(verifyInfo.done + 1, verifyInfo.total)}/${verifyInfo.total}…` : '';
+  const sourceNote = activePlatform === 'vinted' ? ' · Vinted sniper' : (activePlatform === 'ebay' ? ' · eBay Browse API' : (activePlatform === 'tradera' ? ' · Tradera REST v4' : (viewMode === 'scan' ? ' · live scan' : '')));
+  $('resultCount').textContent = (deals.length || verifyNote) ? `${deals.length} of ${allDeals.length}${hiddenNote}${vgNote}${sourceNote}${verifyNote}` : '';
   if (!deals.length && !misses.length && !goneDeals.length) {
     wrap.innerHTML = '';
     empty.classList.remove('hidden');
@@ -1242,11 +1626,19 @@ function render() {
       ? (vgHidden
           ? `${vgHidden} deal${vgHidden === 1 ? '' : 's'} hidden by “VG+ only” — untick it to see ${vgHidden === 1 ? 'it' : 'them'} (cloud/email deals can’t be condition-verified).`
           : 'No deals match your filters — loosen the sliders.')
-      : (viewMode === 'scan'
+      : (activePlatform === 'vinted'
+          ? (vintedStatus.running
+              ? 'Sniper is checking Vinted. No wantlist match meets your discount rules yet.'
+              : 'No Vinted deals yet. Enable the background sniper or scan Vinted now.')
+          : (activePlatform === 'ebay'
+              ? (ebayStatus.running ? 'The official eBay API is scanning your wantlist.' : (ebayStatus.configured ? 'No eBay deals yet. Run a scan or enable background watch.' : 'Configure your eBay App ID and Cert ID to start.'))
+              : (activePlatform === 'tradera'
+                  ? (traderaStatus.running ? 'The official Tradera API is scanning your wantlist.' : (traderaStatus.configured ? 'No fixed-price Tradera deals yet. Run a scan or enable background watch.' : 'Configure your Tradera App ID and App Key to start.'))
+                  : (viewMode === 'scan'
           ? (scannedOnce
               ? 'Scan finished — no confirmed VG+ copies meet your discount threshold right now.'
               : 'No scan yet. Hit ⚡ Full scan to sweep your wantlist for verified-VG+ bargains.')
-          : 'No deals yet — hit ⚡ Full scan.');
+          : 'No deals yet — hit ⚡ Full scan.'))));
     return;
   }
   empty.classList.add('hidden');
@@ -1457,6 +1849,9 @@ function notifyNew(deals) {
 }
 
 async function refresh() {
+  if (activePlatform === 'vinted') { await refreshVintedSnapshot(); return; }
+  if (activePlatform === 'ebay') { await refreshEbaySnapshot(); return; }
+  if (activePlatform === 'tradera') { await refreshTraderaSnapshot(); return; }
   if (viewMode === 'scan') return; // don't clobber live scan results
   allNearMisses = []; // cloud deals.json carries no near-misses — they exist only in a local scan
   if (!hasApi) {
@@ -1502,14 +1897,59 @@ function setScanUI(on) {
   $('city-run').disabled = on || cityDigging;
   $('btn-fullscan').innerHTML = on
     ? '<span>Scanning…</span>'
-    : '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Scan wantlist</span>';
+    : `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${activePlatform === 'vinted' ? 'Scan Vinted' : (activePlatform === 'ebay' ? 'Scan eBay' : (activePlatform === 'tradera' ? 'Scan Tradera' : 'Scan wantlist'))}</span>`;
   // While a scan runs the badge says "Scanning…"; once it ends, re-check the real service state.
   if (on) setServiceBadge(lastHealth); else refreshHealth();
 }
 
 let scanRetryTimer = null; // pending retry after a cloud-busy postponement (one at a time)
 
+function acceptDiscogsScan(res) {
+  const deals = (res && res.deals) || [];
+  const nearMisses = (res && res.nearMisses) || [];
+  platformViews.discogs = { ...platformViews.discogs, deals, nearMisses, viewMode: 'scan', scannedOnce: true };
+  seenIds = new Set(deals.map((deal) => deal.id));
+  if (activePlatform === 'discogs') {
+    restorePlatformView('discogs');
+    setStatus({ wantlistSize: res ? (res.wantlistTotal ?? res.total) : '—' });
+    render();
+  }
+}
+
 async function startScan(opts = {}) {
+  if (activePlatform === 'vinted') {
+    if (!hasApi || !window.api.vintedScanNow || vintedStatus.running) return;
+    vintedStatus = { ...vintedStatus, running: true, health: 'scanning', message: 'Checking newest Vinted listings and one Deep Hunt target…' };
+    renderVintedStatus();
+    try { applyVintedSnapshot(await window.api.vintedScanNow(), { notify: true }); }
+    catch (error) {
+      vintedStatus = { ...vintedStatus, running: false, health: 'error', error: error && error.message ? error.message : String(error) };
+      renderVintedStatus();
+    }
+    return;
+  }
+  if (activePlatform === 'ebay') {
+    if (!hasApi || !window.api.ebayScanNow || ebayStatus.running || !ebayStatus.configured) {
+      if (!ebayStatus.configured) openEbaySettings();
+      return;
+    }
+    ebayStatus = { ...ebayStatus, running: true, health: 'scanning', progress: { checked: 0, total: ebayStatus.targetCount || 0 } };
+    renderEbayStatus();
+    try { applyEbaySnapshot(await window.api.ebayScanNow(), { notify: true }); }
+    catch (error) { ebayStatus = { ...ebayStatus, running: false, health: 'error', error: error && error.message ? error.message : String(error) }; renderEbayStatus(); }
+    return;
+  }
+  if (activePlatform === 'tradera') {
+    if (!hasApi || !window.api.traderaScanNow || traderaStatus.running || !traderaStatus.configured) {
+      if (!traderaStatus.configured) openTraderaSettings();
+      return;
+    }
+    traderaStatus = { ...traderaStatus, running: true, health: 'scanning', progress: { checked: 0, total: traderaStatus.targetCount || 0 } };
+    renderTraderaStatus();
+    try { applyTraderaSnapshot(await window.api.traderaScanNow(), { notify: true }); }
+    catch (error) { traderaStatus = { ...traderaStatus, running: false, health: 'error', error: error && error.message ? error.message : String(error) }; renderTraderaStatus(); }
+    return;
+  }
   if (!hasApi) { alert('Local scan needs the desktop app (run it with npm start).'); return; }
   if (scanning || scouting || cityDigging) return;
   if (scanRetryTimer) { clearTimeout(scanRetryTimer); scanRetryTimer = null; }
@@ -1528,25 +1968,12 @@ async function startScan(opts = {}) {
     if (opts.background) {
       // If the scan view is what's on screen (restored by boot after a restart), a background scan
       // just produced FRESHER results for that very view — show them instead of the stale snapshot.
-      if (viewMode === 'scan') {
-        scannedOnce = true;
-        allDeals = (res && res.deals) || [];
-        allNearMisses = (res && res.nearMisses) || [];
-        seenIds = new Set(allDeals.map((d) => d.id));
-        setStatus({ wantlistSize: res ? (res.wantlistTotal ?? res.total) : '—' });
-        render();
-      }
+      if (platformViews.discogs.viewMode === 'scan') acceptDiscogsScan(res);
       refreshGems();
       refresh(); // no-op in scan view; otherwise re-pull + re-verify the cloud feed
     } else {
-      viewMode = 'scan';
-      scannedOnce = true;
-      allDeals = (res && res.deals) || [];
-      allNearMisses = (res && res.nearMisses) || [];
-      seenIds = new Set(allDeals.map((d) => d.id));
-      setStatus({ wantlistSize: res ? (res.wantlistTotal ?? res.total) : '—' });
+      acceptDiscogsScan(res);
       refreshGems(); // the scan may have found rare gems / refreshed the zero-stock watch list
-      render();
     }
     }
   } catch (e) {
@@ -1573,7 +2000,7 @@ async function startScan(opts = {}) {
 // scan pushes soldmedians.json as YOU, regular auto-scans also keep the GitHub cron from being
 // disabled after 60 days of no user activity.
 async function maybeAutoScan() {
-  if (!hasApi || scanning || scouting) return; // both scans share one Discogs token/rate budget
+  if (activePlatform !== 'discogs' || !hasApi || scanning || scouting) return; // both scans share one Discogs token/rate budget
   // Need a configured Discogs token, or a scan can't run (and would just error).
   let cfg; try { cfg = await window.api.getConfig(); } catch { cfg = null; }
   if (!cfg || !cfg.hasToken || !cfg.username) return;
@@ -1666,6 +2093,118 @@ async function openSettings() {
   refreshDiscogsLoginStatus();
 }
 function closeSettings() { $('settings-modal').classList.add('hidden'); }
+
+async function openEbaySettings() {
+  closeSettings();
+  const result = $('ebay-test-result'); result.textContent = ''; result.className = 'test-result';
+  let settings = {}; let credentials = {};
+  if (hasApi) {
+    [settings, credentials] = await Promise.all([
+      window.api.getSettings().catch(() => ({})),
+      window.api.ebayCredentialsStatus().catch(() => ({})),
+    ]);
+  }
+  $('ebay-environment').value = settings.ebayEnvironment === 'sandbox' ? 'sandbox' : 'production';
+  $('ebay-marketplace').value = settings.ebayMarketplace || 'EBAY_NL';
+  $('ebay-country').value = settings.ebayDeliveryCountry || 'NL';
+  $('ebay-postal-code').value = settings.ebayPostalCode || '';
+  $('ebay-client-id').value = credentials.clientId || '';
+  $('ebay-client-secret').value = '';
+  $('ebay-client-secret').placeholder = credentials.hasSecret ? 'saved securely — leave blank to keep' : 'paste once; encrypted on save';
+  if (credentials.encryptionAvailable === false) {
+    result.textContent = 'Secure credential storage is unavailable; the Cert ID cannot be saved on this computer.';
+    result.className = 'test-result bad';
+  }
+  $('ebay-modal').classList.remove('hidden');
+  $('ebay-client-id').focus();
+}
+function closeEbaySettings() { $('ebay-modal').classList.add('hidden'); }
+function collectEbayOptions() {
+  return {
+    environment: $('ebay-environment').value,
+    marketplace: $('ebay-marketplace').value,
+    deliveryCountry: $('ebay-country').value,
+    postalCode: $('ebay-postal-code').value.trim(),
+  };
+}
+async function saveEbaySetup(runTest = false) {
+  const result = $('ebay-test-result');
+  if (!hasApi) { result.textContent = 'Demo mode (no Electron bridge).'; return false; }
+  const clientId = $('ebay-client-id').value.trim();
+  const clientSecret = $('ebay-client-secret').value.trim();
+  if (!clientId) { result.textContent = 'Enter the eBay App ID first.'; result.className = 'test-result bad'; return false; }
+  result.textContent = runTest ? 'Saving securely and testing eBay…' : 'Saving securely…'; result.className = 'test-result';
+  $('ebay-test-btn').disabled = true; $('ebay-save').disabled = true;
+  try {
+    await window.api.ebaySaveCredentials({ clientId, clientSecret });
+    const options = collectEbayOptions();
+    await window.api.ebayConfigure(options);
+    $('ebay-client-secret').value = '';
+    $('ebay-client-secret').placeholder = 'saved securely — leave blank to keep';
+    if (runTest) {
+      const response = await window.api.ebayTest({
+        ebayEnvironment: options.environment,
+        ebayMarketplace: options.marketplace,
+        ebayDeliveryCountry: options.deliveryCountry,
+        ebayPostalCode: options.postalCode,
+      });
+      if (!response || !response.ok) throw new Error(response && response.error || 'eBay connection test failed.');
+      result.textContent = options.environment === 'sandbox'
+        ? '✓ Sandbox credentials accepted. Sandbox search uses eBay mock inventory.'
+        : `✓ Connected to ${options.marketplace}. The production Browse API returned successfully.`;
+      result.className = 'test-result ok';
+      await refreshEbaySnapshot();
+    } else {
+      closeEbaySettings(); await refreshEbaySnapshot();
+    }
+    return true;
+  } catch (error) {
+    result.textContent = 'Failed: ' + (error && error.message ? error.message : String(error)); result.className = 'test-result bad'; return false;
+  } finally { $('ebay-test-btn').disabled = false; $('ebay-save').disabled = false; }
+}
+
+async function openTraderaSettings() {
+  closeSettings();
+  const result = $('tradera-test-result'); result.textContent = ''; result.className = 'test-result';
+  let credentials = {};
+  if (hasApi) credentials = await window.api.traderaCredentialsStatus().catch(() => ({}));
+  $('tradera-app-id').value = credentials.appId || '';
+  $('tradera-app-key').value = '';
+  $('tradera-app-key').placeholder = credentials.hasKey ? 'saved securely — leave blank to keep' : 'paste once; encrypted on save';
+  if (credentials.encryptionAvailable === false) {
+    result.textContent = 'Secure credential storage is unavailable; the App Key cannot be saved on this computer.';
+    result.className = 'test-result bad';
+  }
+  $('tradera-modal').classList.remove('hidden');
+  $('tradera-app-id').focus();
+}
+function closeTraderaSettings() { $('tradera-modal').classList.add('hidden'); }
+async function saveTraderaSetup(runTest = false) {
+  const result = $('tradera-test-result');
+  if (!hasApi) { result.textContent = 'Demo mode (no Electron bridge).'; return false; }
+  const appId = $('tradera-app-id').value.trim();
+  const appKey = $('tradera-app-key').value.trim();
+  if (!/^\d+$/.test(appId)) { result.textContent = 'Enter the numeric Tradera App ID first.'; result.className = 'test-result bad'; return false; }
+  result.textContent = runTest ? 'Saving securely and testing Tradera…' : 'Saving securely…'; result.className = 'test-result';
+  $('tradera-test-btn').disabled = true; $('tradera-save').disabled = true;
+  try {
+    await window.api.traderaSaveCredentials({ appId, appKey });
+    $('tradera-app-key').value = '';
+    $('tradera-app-key').placeholder = 'saved securely — leave blank to keep';
+    if (runTest) {
+      const response = await window.api.traderaTest();
+      if (!response || !response.ok) throw new Error(response && response.error || 'Tradera connection test failed.');
+      result.textContent = `✓ Connected to Tradera REST v4. Search returned ${Number(response.sampleItems || 0)} sample item${Number(response.sampleItems || 0) === 1 ? '' : 's'}.`;
+      result.className = 'test-result ok';
+      await refreshTraderaSnapshot();
+    } else {
+      closeTraderaSettings(); await refreshTraderaSnapshot();
+    }
+    return true;
+  } catch (error) {
+    result.textContent = 'Failed: ' + (error && error.message ? error.message : String(error)); result.className = 'test-result bad'; return false;
+  } finally { $('tradera-test-btn').disabled = false; $('tradera-save').disabled = false; }
+}
 
 // 💎 Recent-sales-for-gems login status: reflects whether the Sales History page is unlocked.
 async function refreshDiscogsLoginStatus() {
@@ -2016,7 +2555,8 @@ async function boot() {
   if (lastScoutResult) scoutData = normalizeScoutData(lastScoutResult);
   let lastCityResult = null; try { lastCityResult = await window.api.cityDigLast(); } catch { lastCityResult = null; }
   if (lastCityResult) cityDigData = normalizeCityDigData(lastCityResult);
-  render();
+  platformViews.discogs = { deals: allDeals, nearMisses: allNearMisses, gems: gemsData, viewMode, scannedOnce };
+  await setPlatform(activePlatform);
   refreshHealth();
 }
 
@@ -2033,6 +2573,7 @@ window.addEventListener('DOMContentLoaded', () => {
   renderCityDirectory(new Set(Array.isArray(cityPrefs.sellerUsernames) && cityPrefs.sellerUsernames.length ? cityPrefs.sellerUsernames : (currentCity()?.stores || []).filter((store) => store.sellerUsername).map((store) => store.sellerUsername)));
   updateFilterUi();
   updateViewCopy();
+  $('platform-select').addEventListener('change', () => setPlatform($('platform-select').value));
   $('tab-deals').addEventListener('click', () => setTab('deals'));
   $('tab-gems').addEventListener('click', () => setTab('gems'));
   $('tab-scout').addEventListener('click', () => setTab('scout'));
@@ -2048,6 +2589,59 @@ window.addEventListener('DOMContentLoaded', () => {
   $('btn-filter-toggle').addEventListener('click', () => setFilterPanel($('btn-filter-toggle').getAttribute('aria-expanded') !== 'true'));
   $('btn-filter-reset').addEventListener('click', resetFilters);
   $('btn-fullscan').addEventListener('click', () => startScan({ fullMedians: true }));
+  $('vinted-scan-now').addEventListener('click', () => startScan());
+  $('vinted-backfill').addEventListener('click', async () => {
+    if (!hasApi || !window.api.vintedStartBackfill || !window.api.vintedCancelBackfill) return;
+    const button = $('vinted-backfill');
+    button.disabled = true;
+    try {
+      const active = !!(vintedStatus.backfill && vintedStatus.backfill.active);
+      applyVintedSnapshot(await (active ? window.api.vintedCancelBackfill() : window.api.vintedStartBackfill()));
+    } catch (error) {
+      vintedStatus = { ...vintedStatus, health: 'error', error: error && error.message ? error.message : String(error) };
+      renderVintedStatus();
+    } finally { button.disabled = false; }
+  });
+  $('vinted-enabled').addEventListener('change', async () => {
+    if (!hasApi || !window.api.vintedSetEnabled) return;
+    $('vinted-enabled').disabled = true;
+    try { applyVintedSnapshot(await window.api.vintedSetEnabled($('vinted-enabled').checked)); }
+    catch (error) { vintedStatus = { ...vintedStatus, health: 'error', error: error.message }; renderVintedStatus(); }
+    finally { $('vinted-enabled').disabled = false; }
+  });
+  $('vinted-poll-interval').addEventListener('change', async () => {
+    if (!hasApi || !window.api.vintedConfigure) return;
+    try { applyVintedSnapshot(await window.api.vintedConfigure({ pollSeconds: Number($('vinted-poll-interval').value) })); }
+    catch (error) { vintedStatus = { ...vintedStatus, health: 'error', error: error.message }; renderVintedStatus(); }
+  });
+  $('ebay-scan-now').addEventListener('click', () => startScan());
+  $('ebay-configure').addEventListener('click', openEbaySettings);
+  $('ebay-enabled').addEventListener('change', async () => {
+    if (!hasApi || !window.api.ebaySetEnabled) return;
+    $('ebay-enabled').disabled = true;
+    try { applyEbaySnapshot(await window.api.ebaySetEnabled($('ebay-enabled').checked)); }
+    catch (error) { ebayStatus = { ...ebayStatus, health: 'error', error: error.message }; renderEbayStatus(); }
+    finally { $('ebay-enabled').disabled = !ebayStatus.configured; }
+  });
+  $('ebay-poll-interval').addEventListener('change', async () => {
+    if (!hasApi || !window.api.ebayConfigure) return;
+    try { applyEbaySnapshot(await window.api.ebayConfigure({ pollMinutes: Number($('ebay-poll-interval').value) })); }
+    catch (error) { ebayStatus = { ...ebayStatus, health: 'error', error: error.message }; renderEbayStatus(); }
+  });
+  $('tradera-scan-now').addEventListener('click', () => startScan());
+  $('tradera-configure').addEventListener('click', openTraderaSettings);
+  $('tradera-enabled').addEventListener('change', async () => {
+    if (!hasApi || !window.api.traderaSetEnabled) return;
+    $('tradera-enabled').disabled = true;
+    try { applyTraderaSnapshot(await window.api.traderaSetEnabled($('tradera-enabled').checked)); }
+    catch (error) { traderaStatus = { ...traderaStatus, health: 'error', error: error.message }; renderTraderaStatus(); }
+    finally { $('tradera-enabled').disabled = !traderaStatus.configured; }
+  });
+  $('tradera-poll-interval').addEventListener('change', async () => {
+    if (!hasApi || !window.api.traderaConfigure) return;
+    try { applyTraderaSnapshot(await window.api.traderaConfigure({ pollMinutes: Number($('tradera-poll-interval').value) })); }
+    catch (error) { traderaStatus = { ...traderaStatus, health: 'error', error: error.message }; renderTraderaStatus(); }
+  });
   $('btn-scan-cancel').addEventListener('click', () => { if (hasApi) window.api.scrapeCancel(); $('scan-text').textContent = 'Stopping…'; });
   $('btn-settings').addEventListener('click', openSettings);
   $('svc-badge').addEventListener('click', () => { const u = $('svc-badge').dataset.url; if (u) openUrl(u); });
@@ -2059,6 +2653,18 @@ window.addEventListener('DOMContentLoaded', () => {
   $('set-test-btn').addEventListener('click', testConnection);
   $('set-sourceType').addEventListener('change', toggleSrc);
   $('set-account-btn').addEventListener('click', () => { closeSettings(); openWizard(false); });
+  $('set-ebay-btn').addEventListener('click', openEbaySettings);
+  $('ebay-cancel').addEventListener('click', closeEbaySettings);
+  $('ebay-save').addEventListener('click', () => saveEbaySetup(false));
+  $('ebay-test-btn').addEventListener('click', () => saveEbaySetup(true));
+  $('ebay-keys-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://developer.ebay.com/my/keys'); });
+  $('ebay-access-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://developer.ebay.com/api-docs/buy/static/buy-requirements.html'); });
+  $('set-tradera-btn').addEventListener('click', openTraderaSettings);
+  $('tradera-cancel').addEventListener('click', closeTraderaSettings);
+  $('tradera-save').addEventListener('click', () => saveTraderaSetup(false));
+  $('tradera-test-btn').addEventListener('click', () => saveTraderaSetup(true));
+  $('tradera-register-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.tradera.com/'); });
+  $('tradera-api-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.tradera.com/documentation/rest-getting-started'); });
 
   // ☁ Cloud setup wizard
   $('set-cloud-btn').addEventListener('click', openCloud);
@@ -2095,6 +2701,9 @@ window.addEventListener('DOMContentLoaded', () => {
   $('shipEst').addEventListener('input', onFilterChanged);
 
   if (hasApi) window.api.onScrapeProgress(onScanProgress);
+  if (hasApi && window.api.onVintedUpdate) window.api.onVintedUpdate((message) => applyVintedSnapshot(message, { notify: true }));
+  if (hasApi && window.api.onEbayUpdate) window.api.onEbayUpdate((message) => applyEbaySnapshot(message, { notify: true }));
+  if (hasApi && window.api.onTraderaUpdate) window.api.onTraderaUpdate((message) => applyTraderaSnapshot(message, { notify: true }));
   if (hasApi) window.api.onScoutProgress(onScoutProgress);
   if (hasApi && window.api.onCityDigProgress) window.api.onCityDigProgress(onCityDigProgress);
   if (hasApi && window.api.onVerifyProgress) window.api.onVerifyProgress((m) => {

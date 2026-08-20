@@ -18,6 +18,45 @@ contextBridge.exposeInMainWorld('api', {
   scrapeRun: (opts) => ipcRenderer.invoke('scrape:run', opts),
   scrapeCancel: () => ipcRenderer.invoke('scrape:cancel'),
   scrapeLast: () => ipcRenderer.invoke('scrape:last'),
+  // Vinted: an anonymous, local-only newest-listings sniper. The renderer receives normalized
+  // listings and health only; session cookies stay inside the main process and are never exposed.
+  vintedSnapshot: () => ipcRenderer.invoke('vinted:snapshot'),
+  vintedSetEnabled: (enabled) => ipcRenderer.invoke('vinted:setEnabled', !!enabled),
+  vintedConfigure: (options) => ipcRenderer.invoke('vinted:configure', options || {}),
+  vintedScanNow: () => ipcRenderer.invoke('vinted:scanNow'),
+  vintedStartBackfill: () => ipcRenderer.invoke('vinted:startBackfill'),
+  vintedCancelBackfill: () => ipcRenderer.invoke('vinted:cancelBackfill'),
+  onVintedUpdate: (cb) => {
+    const h = (_e, m) => cb(m);
+    ipcRenderer.on('vinted:update', h);
+    return () => ipcRenderer.removeListener('vinted:update', h);
+  },
+  // eBay: official Browse API. The renderer can submit a Cert ID once, but can never read it back.
+  ebayCredentialsStatus: () => ipcRenderer.invoke('ebay:credentialsStatus'),
+  ebaySaveCredentials: (credentials) => ipcRenderer.invoke('ebay:saveCredentials', credentials || {}),
+  ebayTest: (options) => ipcRenderer.invoke('ebay:test', options || {}),
+  ebaySnapshot: () => ipcRenderer.invoke('ebay:snapshot'),
+  ebaySetEnabled: (enabled) => ipcRenderer.invoke('ebay:setEnabled', !!enabled),
+  ebayConfigure: (options) => ipcRenderer.invoke('ebay:configure', options || {}),
+  ebayScanNow: () => ipcRenderer.invoke('ebay:scanNow'),
+  onEbayUpdate: (cb) => {
+    const h = (_e, m) => cb(m);
+    ipcRenderer.on('ebay:update', h);
+    return () => ipcRenderer.removeListener('ebay:update', h);
+  },
+  // Tradera: official REST v4 app authentication. The App Key is write-only from the renderer.
+  traderaCredentialsStatus: () => ipcRenderer.invoke('tradera:credentialsStatus'),
+  traderaSaveCredentials: (credentials) => ipcRenderer.invoke('tradera:saveCredentials', credentials || {}),
+  traderaTest: () => ipcRenderer.invoke('tradera:test'),
+  traderaSnapshot: () => ipcRenderer.invoke('tradera:snapshot'),
+  traderaSetEnabled: (enabled) => ipcRenderer.invoke('tradera:setEnabled', !!enabled),
+  traderaConfigure: (options) => ipcRenderer.invoke('tradera:configure', options || {}),
+  traderaScanNow: () => ipcRenderer.invoke('tradera:scanNow'),
+  onTraderaUpdate: (cb) => {
+    const h = (_e, m) => cb(m);
+    ipcRenderer.on('tradera:update', h);
+    return () => ipcRenderer.removeListener('tradera:update', h);
+  },
   // Scout: discover valuable vinyl outside the current wantlist by Discogs genre/style.
   scoutRun: (opts) => ipcRenderer.invoke('scout:run', opts),
   scoutCancel: () => ipcRenderer.invoke('scout:cancel'),

@@ -15,7 +15,7 @@
  * and there are no CORS concerns. The renderer talks to us over IPC (see preload.js).
  */
 
-const { app, BrowserWindow, ipcMain, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, session, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { scanMinDiscount, parseMoney, evaluateScanPreliminary } = require('./scan-policy');
@@ -26,6 +26,11 @@ const { makeListingHistory } = require('./listing-history');
 const { normalizeScoutOptions, normalizeSearchResult, suggestionSnapshot, scoutScore, sortScoutResults } = require('./scout-policy');
 const { normalizeCityDigOptions, looksLikeVinyl, normalizeInventoryListing, matchTaxonomies } = require('./city-dig-policy');
 const { CITY_DIG_CITIES } = require('./city-dig-data');
+const { createVintedService } = require('./vinted/service');
+const { createEbayClient } = require('./ebay/client');
+const { createEbayService } = require('./ebay/service');
+const { createTraderaClient } = require('./tradera/client');
+const { createTraderaService } = require('./tradera/service');
 
 // Preserve settings for users upgrading from Deal Watcher. Electron derives a new user-data folder
 // from productName; switching blindly would make an upgraded app look like a clean install. Fresh
@@ -89,6 +94,26 @@ const DEFAULT_SETTINGS = {
   token: '',
   autoPushMedians: true, // dev/owner only: after a scan, commit+push soldmedians.json for the cloud
   autoScanOnLaunchHours: 1, // re-scan while the app is open whenever the last scan is older than this many hours (also gates the launch scan). 0 = off
+  // Vinted is opt-in because it uses Vinted's anonymous website endpoints rather than a public API.
+  // One broad newest-first request serves the whole wantlist; targeted deep hunts run separately.
+  vintedEnabled: false,
+  vintedPollSeconds: 15,
+  vintedDeepHuntSeconds: 60,
+  // eBay uses the official Browse API. The Cert ID is stored separately with Electron safeStorage;
+  // settings contain only non-secret routing and scheduling preferences.
+  ebayEnabled: false,
+  ebayPollMinutes: 15,
+  ebayBatchSize: 5,
+  ebayEnvironment: 'production',
+  ebayMarketplace: 'EBAY_NL',
+  ebayDeliveryCountry: 'NL',
+  ebayPostalCode: '',
+  // Tradera uses app-level credentials for read-only REST v4 search and item detail calls.
+  // The App Key is encrypted separately; no user token is requested because this integration
+  // never bids, buys, lists or acts on behalf of a Tradera account.
+  traderaEnabled: false,
+  traderaPollMinutes: 30,
+  traderaBatchSize: 5,
 };
 
 function readSettings() {
@@ -103,6 +128,74 @@ function readSettings() {
 }
 function writeSettings(s) {
   fs.writeFileSync(SETTINGS_FILE(), JSON.stringify(s, null, 2));
+}
+
+// The eBay App ID is an identifier; the Cert ID is a secret. Keep the latter out of settings.json
+// and encrypt it with the operating-system credential facility exposed by Electron safeStorage.
+const EBAY_CREDENTIALS_FILE = () => path.join(app.getPath('userData'), 'ebay-credentials.json');
+function readEbayCredentialRecord() {
+  try { return JSON.parse(fs.readFileSync(EBAY_CREDENTIALS_FILE(), 'utf8')); } catch { return {}; }
+}
+function readEbayCredentials() {
+  const record = readEbayCredentialRecord();
+  let clientSecret = '';
+  if (record.secret && safeStorage.isEncryptionAvailable()) {
+    try { clientSecret = safeStorage.decryptString(Buffer.from(String(record.secret), 'base64')); } catch { clientSecret = ''; }
+  }
+  return { clientId: String(record.clientId || ''), clientSecret };
+}
+function ebayCredentialStatus() {
+  const record = readEbayCredentialRecord();
+  const credentials = readEbayCredentials();
+  return {
+    clientId: String(record.clientId || ''),
+    hasSecret: !!credentials.clientSecret,
+    encryptionAvailable: safeStorage.isEncryptionAvailable(),
+    updatedAt: record.updatedAt || null,
+  };
+}
+function writeEbayCredentials({ clientId, clientSecret } = {}) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure credential storage is not available on this computer. The eBay Cert ID was not saved.');
+  const current = readEbayCredentials();
+  const id = String(clientId || current.clientId || '').trim();
+  const secret = String(clientSecret || current.clientSecret || '').trim();
+  if (!id || !secret) throw new Error('Both eBay App ID and Cert ID are required.');
+  const record = { clientId: id, secret: safeStorage.encryptString(secret).toString('base64'), updatedAt: Date.now() };
+  fs.writeFileSync(EBAY_CREDENTIALS_FILE(), JSON.stringify(record), { encoding: 'utf8', mode: 0o600 });
+  return ebayCredentialStatus();
+}
+
+const TRADERA_CREDENTIALS_FILE = () => path.join(app.getPath('userData'), 'tradera-credentials.json');
+function readTraderaCredentialRecord() {
+  try { return JSON.parse(fs.readFileSync(TRADERA_CREDENTIALS_FILE(), 'utf8')); } catch { return {}; }
+}
+function readTraderaCredentials() {
+  const record = readTraderaCredentialRecord();
+  let appKey = '';
+  if (record.secret && safeStorage.isEncryptionAvailable()) {
+    try { appKey = safeStorage.decryptString(Buffer.from(String(record.secret), 'base64')); } catch { appKey = ''; }
+  }
+  return { appId: String(record.appId || ''), appKey };
+}
+function traderaCredentialStatus() {
+  const record = readTraderaCredentialRecord();
+  const credentials = readTraderaCredentials();
+  return {
+    appId: String(record.appId || ''),
+    hasKey: !!credentials.appKey,
+    encryptionAvailable: safeStorage.isEncryptionAvailable(),
+    updatedAt: record.updatedAt || null,
+  };
+}
+function writeTraderaCredentials({ appId, appKey } = {}) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure credential storage is not available on this computer. The Tradera App Key was not saved.');
+  const current = readTraderaCredentials();
+  const id = String(appId || current.appId || '').trim();
+  const key = String(appKey || current.appKey || '').trim();
+  if (!/^\d+$/.test(id) || !key) throw new Error('A numeric Tradera App ID and App Key are required.');
+  const record = { appId: id, secret: safeStorage.encryptString(key).toString('base64'), updatedAt: Date.now() };
+  fs.writeFileSync(TRADERA_CREDENTIALS_FILE(), JSON.stringify(record), { encoding: 'utf8', mode: 0o600 });
+  return traderaCredentialStatus();
 }
 
 function withTimeout(ms) {
@@ -1615,6 +1708,186 @@ async function testConfig({ username, token } = {}) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Vinted adapter — anonymous newest feed + local pressing-aware wantlist matching.
+// ---------------------------------------------------------------------------
+// Vinted has no public consumer-search API. This opt-in adapter uses the anonymous catalog request
+// the website itself makes, never logs in, never bypasses a challenge and pauses automatically on
+// 403/429. Discogs remains the source of the wantlist and sold-median reference values.
+let vintedService = null;
+let vintedDiscogsClient = null;
+let vintedDiscogsToken = null;
+function getVintedDiscogsClient(config) {
+  if (!vintedDiscogsClient || vintedDiscogsToken !== config.token) {
+    const { makeClient } = loadWatcher();
+    vintedDiscogsClient = makeClient({
+      token: config.token,
+      userAgent: `DiscogsDealShark/${app.getVersion()} (Vinted pressing matcher)`,
+      minIntervalMs: 1100,
+    });
+    vintedDiscogsToken = config.token;
+  }
+  return vintedDiscogsClient;
+}
+function getVintedService() {
+  if (vintedService) return vintedService;
+  vintedService = createVintedService({
+    stateFile: path.join(app.getPath('userData'), 'vinted-state.json'),
+    readSettings,
+    writeSettings: (patch) => writeSettings({ ...readSettings(), ...(patch || {}) }),
+    readConfig: readConfigFile,
+    loadWantlist: async (config) => getVintedDiscogsClient(config).getWantlist(config.username),
+    loadMedians: async () => localRealMedians(),
+    loadReleaseMetadata: async (releaseId, config) => {
+      const { makeStore } = loadWatcher();
+      const store = makeStore(stateDir());
+      const cached = store.getReleaseMeta(releaseId);
+      // Pressing metadata is effectively immutable; refresh only very old records or older cache
+      // shapes that predate formats/labels, which are required for safe Vinted matching.
+      if (cached && Array.isArray(cached.formats) && Array.isArray(cached.labels)
+        && Date.now() - (Number(cached.ts) || 0) < 180 * 24 * 60 * 60 * 1000) return cached;
+      const metadata = await getVintedDiscogsClient(config).getRelease(releaseId);
+      if (metadata) store.setReleaseMeta(releaseId, { ...metadata, ts: Date.now() });
+      return metadata;
+    },
+    loadRareTargets: async () => {
+      try {
+        const history = JSON.parse(fs.readFileSync(path.join(stateDir(), 'history.json'), 'utf8'));
+        return Object.entries(history).filter(([, rows]) => {
+          const last = Array.isArray(rows) && rows.length ? rows[rows.length - 1] : null;
+          return last && last.numForSale === 0;
+        }).map(([releaseId]) => releaseId);
+      } catch { return []; }
+    },
+    emit: (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('vinted:update', payload);
+    },
+  });
+  return vintedService;
+}
+
+// ---------------------------------------------------------------------------
+// eBay adapter — official Browse API + local pressing-aware wantlist matching.
+// ---------------------------------------------------------------------------
+let ebayService = null;
+let ebayDiscogsClient = null;
+let ebayDiscogsToken = null;
+function getEbayDiscogsClient(config) {
+  if (!ebayDiscogsClient || ebayDiscogsToken !== config.token) {
+    const { makeClient } = loadWatcher();
+    ebayDiscogsClient = makeClient({
+      token: config.token,
+      userAgent: `DiscogsDealShark/${app.getVersion()} (eBay pressing matcher)`,
+      minIntervalMs: 1100,
+    });
+    ebayDiscogsToken = config.token;
+  }
+  return ebayDiscogsClient;
+}
+async function loadEbayReleaseMetadata(releaseId, config) {
+  const { makeStore } = loadWatcher();
+  const store = makeStore(stateDir());
+  const cached = store.getReleaseMeta(releaseId);
+  if (cached && Array.isArray(cached.formats) && Array.isArray(cached.labels)
+    && Date.now() - (Number(cached.ts) || 0) < 180 * 24 * 60 * 60 * 1000) return cached;
+  const metadata = await getEbayDiscogsClient(config).getRelease(releaseId);
+  if (metadata) store.setReleaseMeta(releaseId, { ...metadata, ts: Date.now() });
+  return metadata;
+}
+function getEbayService() {
+  if (ebayService) return ebayService;
+  ebayService = createEbayService({
+    stateFile: path.join(app.getPath('userData'), 'ebay-state.json'),
+    readSettings,
+    writeSettings: (patch) => writeSettings({ ...readSettings(), ...(patch || {}) }),
+    readConfig: readConfigFile,
+    getCredentials: readEbayCredentials,
+    loadWantlist: async (config) => getEbayDiscogsClient(config).getWantlist(config.username),
+    loadMedians: async () => localRealMedians(),
+    loadReleaseMetadata: loadEbayReleaseMetadata,
+    emit: (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ebay:update', payload);
+    },
+  });
+  return ebayService;
+}
+async function testEbayConnection(patch = {}) {
+  try {
+    const settings = { ...readSettings(), ...(patch || {}) };
+    const client = createEbayClient({
+      ...readEbayCredentials(),
+      environment: settings.ebayEnvironment,
+      marketplace: settings.ebayMarketplace,
+      deliveryCountry: settings.ebayDeliveryCountry,
+      postalCode: settings.ebayPostalCode,
+    });
+    const status = await client.health();
+    if (settings.ebayEnvironment !== 'sandbox') {
+      const sample = await client.search({ q: 'vinyl record', limit: 1 });
+      return { ok: true, ...status, sampleItems: sample.items.length };
+    }
+    return { ok: true, ...status, sampleItems: null };
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error), status: error && error.status || null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tradera adapter — official read-only REST v4 + pressing-aware wantlist matching.
+// ---------------------------------------------------------------------------
+let traderaService = null;
+let traderaDiscogsClient = null;
+let traderaDiscogsToken = null;
+function getTraderaDiscogsClient(config) {
+  if (!traderaDiscogsClient || traderaDiscogsToken !== config.token) {
+    const { makeClient } = loadWatcher();
+    traderaDiscogsClient = makeClient({
+      token: config.token,
+      userAgent: `DiscogsDealShark/${app.getVersion()} (Tradera pressing matcher)`,
+      minIntervalMs: 1100,
+    });
+    traderaDiscogsToken = config.token;
+  }
+  return traderaDiscogsClient;
+}
+async function loadTraderaReleaseMetadata(releaseId, config) {
+  const { makeStore } = loadWatcher();
+  const store = makeStore(stateDir());
+  const cached = store.getReleaseMeta(releaseId);
+  if (cached && Array.isArray(cached.formats) && Array.isArray(cached.labels)
+    && Date.now() - (Number(cached.ts) || 0) < 180 * 24 * 60 * 60 * 1000) return cached;
+  const metadata = await getTraderaDiscogsClient(config).getRelease(releaseId);
+  if (metadata) store.setReleaseMeta(releaseId, { ...metadata, ts: Date.now() });
+  return metadata;
+}
+function getTraderaService() {
+  if (traderaService) return traderaService;
+  traderaService = createTraderaService({
+    stateFile: path.join(app.getPath('userData'), 'tradera-state.json'),
+    readSettings,
+    writeSettings: (patch) => writeSettings({ ...readSettings(), ...(patch || {}) }),
+    readConfig: readConfigFile,
+    getCredentials: readTraderaCredentials,
+    loadWantlist: async (config) => getTraderaDiscogsClient(config).getWantlist(config.username),
+    loadMedians: async () => localRealMedians(),
+    loadReleaseMetadata: loadTraderaReleaseMetadata,
+    emit: (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tradera:update', payload);
+    },
+  });
+  return traderaService;
+}
+async function testTraderaConnection() {
+  try {
+    const client = createTraderaClient(readTraderaCredentials());
+    const status = await client.health();
+    const sample = await client.search({ query: 'vinyl', pageNumber: 0, orderBy: 'PriceAscending' });
+    return { ok: true, ...status, sampleItems: sample.items.length };
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error), status: error && error.status || null };
+  }
+}
+
 ipcMain.handle('config:get', () => {
   const c = readConfigFile();
   return {
@@ -1640,6 +1913,34 @@ ipcMain.handle('scrape:run', (e, opts) => runScrape(BrowserWindow.fromWebContent
 ipcMain.handle('verify:run', (e, items) => runVerify(BrowserWindow.fromWebContents(e.sender), items || []));
 ipcMain.handle('scrape:cancel', () => { scrapeAbort = true; return true; });
 ipcMain.handle('scrape:last', () => lastScan());
+ipcMain.handle('vinted:snapshot', () => getVintedService().snapshot());
+ipcMain.handle('vinted:setEnabled', (_e, enabled) => getVintedService().setEnabled(!!enabled));
+ipcMain.handle('vinted:configure', (_e, options) => getVintedService().configure(options || {}));
+ipcMain.handle('vinted:scanNow', () => getVintedService().runOnce({ forceDeep: true }));
+ipcMain.handle('vinted:startBackfill', () => getVintedService().startBackfill());
+ipcMain.handle('vinted:cancelBackfill', () => getVintedService().cancelBackfill());
+ipcMain.handle('ebay:credentialsStatus', () => ebayCredentialStatus());
+ipcMain.handle('ebay:saveCredentials', (_e, credentials) => {
+  const result = writeEbayCredentials(credentials || {});
+  if (ebayService) ebayService.resetClient();
+  return result;
+});
+ipcMain.handle('ebay:test', (_e, options) => testEbayConnection(options || {}));
+ipcMain.handle('ebay:snapshot', () => getEbayService().snapshot());
+ipcMain.handle('ebay:setEnabled', (_e, enabled) => getEbayService().setEnabled(!!enabled));
+ipcMain.handle('ebay:configure', (_e, options) => getEbayService().configure(options || {}));
+ipcMain.handle('ebay:scanNow', () => getEbayService().runOnce({ all: true }));
+ipcMain.handle('tradera:credentialsStatus', () => traderaCredentialStatus());
+ipcMain.handle('tradera:saveCredentials', (_e, credentials) => {
+  const result = writeTraderaCredentials(credentials || {});
+  if (traderaService) traderaService.resetClient();
+  return result;
+});
+ipcMain.handle('tradera:test', () => testTraderaConnection());
+ipcMain.handle('tradera:snapshot', () => getTraderaService().snapshot());
+ipcMain.handle('tradera:setEnabled', (_e, enabled) => getTraderaService().setEnabled(!!enabled));
+ipcMain.handle('tradera:configure', (_e, options) => getTraderaService().configure(options || {}));
+ipcMain.handle('tradera:scanNow', () => getTraderaService().runOnce({ all: true }));
 ipcMain.handle('scout:run', (e, opts) => runScout(BrowserWindow.fromWebContents(e.sender), opts || {}));
 ipcMain.handle('scout:cancel', () => { scoutAbort = true; return true; });
 ipcMain.handle('scout:last', () => lastScout());
@@ -1981,7 +2282,13 @@ function createWindow() {
   win.removeMenu();
   win.loadFile('index.html');
   // Show only once painted, to avoid the white flash (same pattern as BPM Tapper).
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    win.show();
+    // Starts only when the user explicitly enabled it; otherwise this is a zero-network snapshot.
+    getVintedService().start();
+    getEbayService().start();
+    getTraderaService().start();
+  });
 }
 
 // Single-instance lock. Every window/dir path (settings.json, last-scan.json, state/) is shared, so
@@ -2003,6 +2310,7 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
   app.whenReady().then(createWindow);
+  app.on('before-quit', () => { if (vintedService) vintedService.stop(); if (ebayService) ebayService.stop(); });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 }

@@ -63,12 +63,127 @@
   </div>
 
   <div class="workspace-shell">
-    <nav class="tabs" aria-label="Watchlist views">
-      <button id="tab-deals" class="tab active" type="button"><span class="tab-icon deal-icon">↘</span><span>Deals</span></button>
-      <button id="tab-gems" class="tab" type="button" title="Releases that had zero copies for sale and just became available"><span class="tab-icon gem-icon">◆</span><span>Rare gems</span><span id="gems-count" class="tab-badge hidden"></span></button>
-      <button id="tab-scout" class="tab" type="button" title="Discover valuable records outside your wantlist"><span class="tab-icon scout-icon">⌖</span><span>Scout</span></button>
-      <button id="tab-city" class="tab" type="button" title="Dig through physical record-store inventories by city"><span class="tab-icon city-icon">◎</span><span>City Dig</span></button>
+    <div class="platform-bar" id="platform-bar">
+      <div class="platform-picker">
+        <label for="platform-select">Marketplace</label>
+        <select id="platform-select" aria-label="Marketplace">
+          <option value="discogs" selected>Discogs</option>
+          <option value="vinted">Vinted</option>
+          <option value="ebay">eBay</option>
+          <option value="tradera">Tradera</option>
+        </select>
+      </div>
+      <div class="platform-context" id="platform-context" aria-live="polite">
+        <span class="platform-context-dot" aria-hidden="true"></span>
+        <span id="platform-context-label">Wantlist, sold medians and connected sellers</span>
+      </div>
+    </div>
+
+    <nav class="tabs" aria-label="Marketplace views">
+      <button id="tab-deals" class="tab active" type="button" data-platform="all" aria-selected="true"><span class="tab-icon deal-icon">↘</span><span>Deals</span></button>
+      <button id="tab-gems" class="tab" type="button" data-platform="all" title="Releases that had zero copies for sale and just became available" aria-selected="false"><span class="tab-icon gem-icon">◆</span><span>Rare gems</span><span id="gems-count" class="tab-badge hidden"></span></button>
+      <button id="tab-scout" class="tab" type="button" data-platform="discogs" title="Discover valuable records outside your wantlist" aria-selected="false"><span class="tab-icon scout-icon">⌖</span><span>Scout</span></button>
+      <button id="tab-city" class="tab" type="button" data-platform="discogs" title="Dig through physical record-store inventories by city" aria-selected="false"><span class="tab-icon city-icon">◎</span><span>City Dig</span></button>
     </nav>
+
+    <section id="vinted-panel" class="vinted-panel hidden" aria-label="Vinted sniper controls">
+      <div class="vinted-panel-copy">
+        <div class="vinted-kicker">VINTED · LIVE FEED</div>
+        <h3>Sniper feed</h3>
+        <p>Watch new listings, or scan the existing Vinted supply once with a resumable backfill. Only supported pressing matches count.</p>
+      </div>
+      <div class="vinted-panel-controls">
+        <label class="switch-row vinted-switch" for="vinted-enabled">
+          <input type="checkbox" id="vinted-enabled" />
+          <span aria-hidden="true"></span>
+          <b>Background sniper</b>
+        </label>
+        <button id="vinted-scan-now" class="primary vinted-scan-now" type="button">Scan Vinted now</button>
+        <button id="vinted-backfill" class="ghost vinted-backfill" type="button">Scan existing listings</button>
+        <label class="vinted-interval" for="vinted-poll-interval">
+          <span>Polling</span>
+          <select id="vinted-poll-interval">
+            <option value="15" selected>Every 15 sec</option>
+            <option value="30">Every 30 sec</option>
+            <option value="60">Every 1 min</option>
+            <option value="120">Every 2 min</option>
+          </select>
+        </label>
+      </div>
+      <div class="vinted-panel-status">
+        <span class="vinted-health is-idle" id="vinted-health"><i aria-hidden="true"></i><b id="vinted-health-label">Ready</b></span>
+        <span class="vinted-status-item"><span>Last scan</span><b id="vinted-last-scan">Not yet</b></span>
+        <span class="vinted-status-item"><span>Next scan</span><b id="vinted-next-scan">—</b></span>
+        <span class="vinted-status-item vinted-backfill-status"><span>Existing scan</span><b id="vinted-backfill-progress">Not started</b></span>
+        <span class="vinted-status-message" id="vinted-status-message" aria-live="polite">Enable the sniper when you are ready to watch new listings.</span>
+      </div>
+    </section>
+
+    <section id="ebay-panel" class="vinted-panel ebay-panel hidden" aria-label="eBay Browse API controls">
+      <div class="vinted-panel-copy">
+        <div class="vinted-kicker">EBAY · OFFICIAL BROWSE API</div>
+        <h3>Wantlist scanner</h3>
+        <p>Search eBay for exact Discogs pressings, compare landed cost with sold medians and open the original eBay listing to buy.</p>
+      </div>
+      <div class="vinted-panel-controls">
+        <label class="switch-row vinted-switch" for="ebay-enabled">
+          <input type="checkbox" id="ebay-enabled" />
+          <span aria-hidden="true"></span>
+          <b>Background watch</b>
+        </label>
+        <button id="ebay-scan-now" class="primary vinted-scan-now" type="button">Scan eBay now</button>
+        <button id="ebay-configure" class="ghost vinted-backfill" type="button">API settings</button>
+        <label class="vinted-interval" for="ebay-poll-interval">
+          <span>Polling</span>
+          <select id="ebay-poll-interval">
+            <option value="15" selected>Every 15 min</option>
+            <option value="30">Every 30 min</option>
+            <option value="60">Every 1 hour</option>
+            <option value="180">Every 3 hours</option>
+          </select>
+        </label>
+      </div>
+      <div class="vinted-panel-status">
+        <span class="vinted-health is-idle" id="ebay-health"><i aria-hidden="true"></i><b id="ebay-health-label">Setup needed</b></span>
+        <span class="vinted-status-item"><span>Last scan</span><b id="ebay-last-scan">Not yet</b></span>
+        <span class="vinted-status-item"><span>Next scan</span><b id="ebay-next-scan">—</b></span>
+        <span class="vinted-status-item"><span>API today</span><b id="ebay-api-calls">0 / 4,800</b></span>
+        <span class="vinted-status-message" id="ebay-status-message" aria-live="polite">Add your eBay developer credentials to connect the official API.</span>
+      </div>
+    </section>
+
+    <section id="tradera-panel" class="vinted-panel tradera-panel hidden" aria-label="Tradera REST API controls">
+      <div class="vinted-panel-copy">
+        <div class="vinted-kicker">TRADERA · OFFICIAL REST API</div>
+        <h3>Wantlist scanner</h3>
+        <p>Search fixed-price Tradera listings, verify the exact Discogs pressing and compare the converted landed-cost estimate with sold medians.</p>
+      </div>
+      <div class="vinted-panel-controls">
+        <label class="switch-row vinted-switch" for="tradera-enabled">
+          <input type="checkbox" id="tradera-enabled" />
+          <span aria-hidden="true"></span>
+          <b>Background watch</b>
+        </label>
+        <button id="tradera-scan-now" class="primary vinted-scan-now" type="button">Scan Tradera now</button>
+        <button id="tradera-configure" class="ghost vinted-backfill" type="button">API settings</button>
+        <label class="vinted-interval" for="tradera-poll-interval">
+          <span>Polling</span>
+          <select id="tradera-poll-interval">
+            <option value="15">Every 15 min</option>
+            <option value="30" selected>Every 30 min</option>
+            <option value="60">Every 1 hour</option>
+            <option value="180">Every 3 hours</option>
+          </select>
+        </label>
+      </div>
+      <div class="vinted-panel-status">
+        <span class="vinted-health is-idle" id="tradera-health"><i aria-hidden="true"></i><b id="tradera-health-label">Setup needed</b></span>
+        <span class="vinted-status-item"><span>Last scan</span><b id="tradera-last-scan">Not yet</b></span>
+        <span class="vinted-status-item"><span>Next scan</span><b id="tradera-next-scan">—</b></span>
+        <span class="vinted-status-item"><span>API today</span><b id="tradera-api-calls">0 / 9,500</b></span>
+        <span class="vinted-status-message" id="tradera-status-message" aria-live="polite">Add your Tradera developer credentials to connect the official API.</span>
+      </div>
+    </section>
 
     <section class="view-header">
       <div class="view-heading">
@@ -230,6 +345,12 @@
         <button type="button" id="set-discogs-login-btn" class="ghost">Log in to Discogs…</button>
       </label>
       <p class="hint" id="set-discogs-login-status"></p>
+      <label>eBay Browse API <span class="opt">(official API, encrypted Cert ID)</span>
+        <button type="button" id="set-ebay-btn" class="ghost">Configure eBay…</button>
+      </label>
+      <label>Tradera REST API <span class="opt">(official API, encrypted App Key)</span>
+        <button type="button" id="set-tradera-btn" class="ghost">Configure Tradera…</button>
+      </label>
       <label>Background scan while open <span class="opt">(keeps sold-medians + the email watcher fresh)</span>
         <select id="set-autoScan">
           <option value="0">Off</option>
@@ -247,6 +368,63 @@
         <span class="spacer"></span>
         <button id="set-cancel" class="ghost">Cancel</button>
         <button id="set-save" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- eBay official Browse API setup -->
+  <div id="ebay-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>eBay Browse API</h2>
+      <p class="hint">Use an eBay Developers App ID and Cert ID. The Cert ID is encrypted with Windows credential protection and never returned to this screen. Production Browse access requires approval from eBay.</p>
+      <label>Environment
+        <select id="ebay-environment"><option value="production" selected>Production</option><option value="sandbox">Sandbox</option></select>
+      </label>
+      <label>App ID (Client ID)
+        <input type="text" id="ebay-client-id" autocomplete="off" spellcheck="false" placeholder="your-app-id" />
+      </label>
+      <label>Cert ID (Client Secret)
+        <input type="password" id="ebay-client-secret" autocomplete="new-password" spellcheck="false" placeholder="paste once; encrypted on save" />
+      </label>
+      <label>Marketplace
+        <select id="ebay-marketplace"><option value="EBAY_NL" selected>Netherlands (EBAY_NL)</option><option value="EBAY_BE">Belgium (EBAY_BE)</option><option value="EBAY_DE">Germany (EBAY_DE)</option><option value="EBAY_GB">Great Britain (EBAY_GB)</option><option value="EBAY_US">United States (EBAY_US)</option></select>
+      </label>
+      <label>Deliver to country
+        <select id="ebay-country"><option value="NL" selected>Netherlands</option><option value="BE">Belgium</option><option value="DE">Germany</option><option value="GB">Great Britain</option><option value="US">United States</option></select>
+      </label>
+      <label>Postal code <span class="opt">(recommended for accurate calculated shipping)</span>
+        <input type="text" id="ebay-postal-code" autocomplete="postal-code" spellcheck="false" placeholder="2011 AA" />
+      </label>
+      <p class="hint"><a href="#" id="ebay-keys-help">Open eBay Application Keys →</a><br /><a href="#" id="ebay-access-help">Read the production access requirements →</a></p>
+      <div id="ebay-test-result" class="test-result"></div>
+      <div class="modal-actions">
+        <button id="ebay-test-btn" class="ghost">Save &amp; test</button>
+        <span class="spacer"></span>
+        <button id="ebay-cancel" class="ghost">Cancel</button>
+        <button id="ebay-save" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tradera official REST API setup -->
+  <div id="tradera-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Tradera REST API</h2>
+      <p class="hint">Use credentials from a Tradera developer application. The App Key is encrypted with Windows credential protection and never returned to this screen. Deal Shark only uses app-authenticated search and item-detail endpoints; it never bids or buys.</p>
+      <label>App ID
+        <input type="text" inputmode="numeric" id="tradera-app-id" autocomplete="off" spellcheck="false" placeholder="1234" />
+      </label>
+      <label>App Key
+        <input type="password" id="tradera-app-key" autocomplete="new-password" spellcheck="false" placeholder="paste once; encrypted on save" />
+      </label>
+      <p class="hint">Prices are returned in SEK and converted to your Discogs currency with the ECB daily reference rate. Seller shipping shown by Tradera is not assumed to be the price to your country, so your existing shipping estimate remains part of deal evaluation.</p>
+      <p class="hint"><a href="#" id="tradera-register-help">Open Tradera Developer Center →</a><br /><a href="#" id="tradera-api-help">Read the REST API documentation →</a></p>
+      <div id="tradera-test-result" class="test-result"></div>
+      <div class="modal-actions">
+        <button id="tradera-test-btn" class="ghost">Save &amp; test</button>
+        <span class="spacer"></span>
+        <button id="tradera-cancel" class="ghost">Cancel</button>
+        <button id="tradera-save" class="primary">Save</button>
       </div>
     </div>
   </div>

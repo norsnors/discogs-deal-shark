@@ -195,6 +195,104 @@ button.pill { width: 100%; text-align: left; cursor: pointer; }
 
 /* Main workspace */
 .workspace-shell { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.platform-bar {
+  min-height: 50px;
+  margin: 16px 22px 0;
+  padding: 7px 9px 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  border: 1px solid var(--line-soft);
+  border-radius: 13px;
+  background: rgba(16, 24, 33, .62);
+}
+.platform-picker { display: flex; align-items: center; gap: 9px; flex: 0 0 auto; }
+.platform-picker label {
+  color: var(--muted-2);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.platform-picker select {
+  height: 34px;
+  min-width: 134px;
+  padding: 0 30px 0 10px;
+  border: 1px solid #334757;
+  border-radius: 9px;
+  color: var(--text);
+  background: #111b25;
+  font-size: 11.5px;
+  font-weight: 730;
+  cursor: pointer;
+}
+.platform-picker select:hover { border-color: #4a6680; background: #162431; }
+.platform-context { min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10.5px; }
+.platform-context-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(59,216,135,.09); }
+body.platform-vinted .platform-context-dot { background: #7f9fff; box-shadow: 0 0 0 3px rgba(127,159,255,.1); }
+body.platform-vinted .platform-context { color: #a8b7d5; }
+body.platform-ebay .platform-context-dot { background: #47c5d3; box-shadow: 0 0 0 3px rgba(71,197,211,.1); }
+body.platform-ebay .platform-context { color: #9ddbe2; }
+body.platform-tradera .platform-context-dot { background: #ffb648; box-shadow: 0 0 0 3px rgba(255,182,72,.1); }
+body.platform-tradera .platform-context { color: #ffd08a; }
+body.platform-vinted #tab-scout, body.platform-vinted #tab-city,
+body.platform-ebay #tab-scout, body.platform-ebay #tab-city,
+body.platform-tradera #tab-scout, body.platform-tradera #tab-city { display: none; }
+body.platform-vinted #svc-badge, body.platform-vinted .activity-menu, body.platform-vinted #btn-telegram,
+body.platform-ebay #svc-badge, body.platform-ebay .activity-menu, body.platform-ebay #btn-telegram,
+body.platform-tradera #svc-badge, body.platform-tradera .activity-menu, body.platform-tradera #btn-telegram { display: none; }
+
+.vinted-panel {
+  margin: 12px 22px 0;
+  padding: 14px 15px 12px;
+  display: grid;
+  grid-template-columns: minmax(250px, 1fr) auto;
+  gap: 13px 20px;
+  border: 1px solid #354d79;
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(47, 72, 126, .28), rgba(16, 24, 35, .94));
+  box-shadow: var(--shadow);
+  flex: 0 0 auto;
+}
+.ebay-panel { border-color: rgba(71,197,211,.28); background: linear-gradient(135deg, rgba(12,44,51,.9), rgba(10,22,31,.96)); }
+.ebay-panel .vinted-kicker { color: #79dce6; }
+.ebay-panel .vinted-scan-now { background: #208b9a; }
+.ebay-panel .vinted-scan-now:hover { background: #29a4b4; }
+.tradera-panel { border-color: rgba(255,182,72,.3); background: linear-gradient(135deg, rgba(66,42,12,.92), rgba(24,20,15,.97)); }
+.tradera-panel .vinted-kicker { color: #ffc970; }
+.tradera-panel .vinted-scan-now { background: #b76f16; }
+.tradera-panel .vinted-scan-now:hover { background: #d18425; }
+.vinted-panel-copy { min-width: 0; }
+.vinted-kicker { color: #9eb9ff; font-size: 8.5px; font-weight: 850; letter-spacing: .15em; }
+.vinted-panel h3 { margin: 3px 0 3px; color: #eef3ff; font-size: 17px; line-height: 1.2; letter-spacing: -.015em; }
+.vinted-panel-copy p { max-width: 590px; margin: 0; color: #a0aec1; font-size: 10.5px; line-height: 1.4; }
+.vinted-panel-controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.vinted-switch { min-height: 36px; margin: 0; padding: 7px 9px; }
+.vinted-switch b { color: #c5d2e5; white-space: nowrap; }
+.vinted-scan-now { min-height: 36px; white-space: nowrap; background: #4775bd; }
+.vinted-scan-now:hover { background: #598ad5; }
+.vinted-backfill { min-height: 36px; white-space: nowrap; border-color: #46628d !important; color: #c9d9f4 !important; }
+.vinted-backfill:hover { border-color: #6488bf !important; background: rgba(72, 111, 174, .13) !important; }
+.vinted-backfill.is-active { border-color: #816535 !important; color: #ffd994 !important; background: rgba(133, 96, 36, .13) !important; }
+.vinted-interval { display: flex; flex-direction: column; gap: 4px; margin-left: 2px; color: #8496ae; font-size: 8px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.vinted-interval select { height: 30px; padding: 0 8px; border: 1px solid #344a69; border-radius: 8px; color: #dbe5f5; background: #0c141e; font-size: 10px; text-transform: none; }
+.vinted-panel-status { grid-column: 1 / -1; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding-top: 11px; border-top: 1px solid rgba(90, 119, 166, .23); }
+.vinted-health, .vinted-status-item { min-height: 27px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #2d405a; border-radius: 8px; background: rgba(7, 14, 23, .4); font-size: 9.5px; }
+.vinted-health { color: #a9b8ce; }
+.vinted-health i { width: 7px; height: 7px; border-radius: 50%; background: #798a9e; }
+.vinted-health.is-live { color: var(--green); border-color: #285a4c; }
+.vinted-health.is-live i { background: var(--green); animation: svc-pulse 2.2s ease-out infinite; }
+.vinted-health.is-scanning { color: #a9c8ff; border-color: #365b92; }
+.vinted-health.is-scanning i { background: var(--accent); animation: svc-pulse-blue 1.2s ease-out infinite; }
+.vinted-health.is-paused { color: var(--amber); border-color: #5d4a2c; }
+.vinted-health.is-paused i { background: var(--amber); }
+.vinted-health.is-error { color: var(--red); border-color: #61363d; }
+.vinted-health.is-error i { background: var(--red); }
+.vinted-status-item { flex-direction: column; align-items: flex-start; gap: 2px; min-width: 78px; color: #718297; }
+.vinted-status-item b { color: #c6d2e3; font-size: 10px; font-weight: 700; }
+.vinted-backfill-status { min-width: 130px; }
+.vinted-status-message { min-width: 180px; flex: 1; color: #8293aa; font-size: 9.5px; line-height: 1.35; }
+
 .tabs {
   display: flex;
   gap: 5px;
@@ -597,6 +695,8 @@ button.ghost:hover { background: var(--panel-2); }
   .city-controls { grid-template-columns: 1fr 1fr; }
   .city-controls fieldset { grid-column: 1 / -1; }
   .city-run { grid-column: 1 / -1; }
+  .vinted-panel { grid-template-columns: 1fr; }
+  .vinted-panel-controls { justify-content: flex-start; }
 }
 @media (max-width: 700px) {
   .topbar { padding-inline: 14px; }
@@ -605,7 +705,9 @@ button.ghost:hover { background: var(--panel-2); }
   .actions button.scan { min-width: 42px; width: 42px; padding: 0; }
   .actions button.scan span { display: none; }
   .view-header { padding-inline: 16px; }
-  .tabs, .discovery-bar, .filters, .scout-panel, .city-panel { margin-left: 14px; margin-right: 14px; }
+  .platform-bar, .tabs, .discovery-bar, .filters, .scout-panel, .city-panel, .vinted-panel { margin-left: 14px; margin-right: 14px; }
+  .platform-bar { margin-top: 12px; flex-wrap: wrap; gap: 8px 12px; padding-block: 8px; }
+  .platform-context { width: 100%; padding-left: 2px; }
   .rule-summary { display: none; }
   .filter-grid { grid-template-columns: repeat(2, minmax(135px, 1fr)); }
   .deals { grid-template-columns: 1fr; padding-inline: 14px; }
@@ -617,4 +719,10 @@ button.ghost:hover { background: var(--panel-2); }
   .world-map { display: none; }
   .city-controls { grid-template-columns: 1fr; }
   .city-controls fieldset, .city-run { grid-column: auto; }
+  .vinted-panel-controls { flex-wrap: wrap; justify-content: flex-start; }
+  .vinted-switch { flex: 1 1 100%; }
+  .vinted-scan-now, .vinted-backfill { flex: 1 1 auto; }
+  .vinted-interval { flex: 0 0 auto; }
+  .vinted-panel-status { align-items: stretch; }
+  .vinted-status-message { flex-basis: 100%; }
 }
