@@ -133,7 +133,7 @@
       <div class="vinted-panel-copy">
         <div class="vinted-kicker">EBAY · OFFICIAL BROWSE API</div>
         <h3>Wantlist scanner</h3>
-        <p>Search eBay for exact Discogs pressings, compare landed cost with sold medians and open the original listing. Only strict deals trigger desktop alerts; dashboard-only matches do not.</p>
+        <p>Search eBay for exact Discogs pressings, compare landed cost with sold medians and open the original listing. Only strict deals trigger desktop alerts and optional 24/7 email; dashboard-only matches do not.</p>
       </div>
       <div class="vinted-panel-controls">
         <label class="switch-row vinted-switch" for="ebay-enabled">
@@ -411,6 +411,16 @@
         <input type="text" id="ebay-postal-code" autocomplete="postal-code" spellcheck="false" placeholder="2011 AA" />
       </label>
       <p class="hint"><a href="#" id="ebay-keys-help">Open eBay Application Keys →</a><br /><a href="#" id="ebay-access-help">Read the production access requirements →</a></p>
+      <div class="provider-cloud-connect">
+        <h3>24/7 email</h3>
+        <p class="hint">Already using the Discogs cloud emails? Paste a GitHub token and press Connect.
+          That explicitly sends your locally saved App ID and Cert ID, encrypted with your watcher's
+          GitHub public key, so strict eBay matches can be emailed while this app is closed.</p>
+        <label>GitHub token <span class="opt">(used once, never stored)</span>
+          <input type="password" id="ebay-cloud-github" autocomplete="new-password" spellcheck="false" placeholder="paste token for your cloud watcher" />
+        </label>
+        <button id="ebay-cloud-connect" class="ghost" type="button">Connect eBay email</button>
+      </div>
       <div id="ebay-test-result" class="test-result"></div>
       <div class="modal-actions">
         <button id="ebay-test-btn" class="ghost">Save &amp; test</button>
@@ -450,7 +460,9 @@
       <h2>☁ 24/7 email alerts</h2>
       <p class="hint">Get deal emails around the clock — even when this app is closed. The app creates
         your own free copy of the watcher on <b>GitHub</b> and switches it on for you. You need two free
-        accounts: <b>GitHub</b> (runs the scans) and <b>Resend</b> (sends the emails). One-time, ~5 minutes.</p>
+        accounts: <b>GitHub</b> (runs the scans) and <b>Resend</b> (sends the emails). One-time, ~5 minutes.
+        If eBay is configured, this action also encrypts its App ID and Cert ID as GitHub Secrets so
+        strict eBay matches can be emailed while the app is closed.</p>
       <label>GitHub token
         <input type="password" id="cloud-github" placeholder="paste a GitHub token here" autocomplete="off" spellcheck="false" />
       </label>

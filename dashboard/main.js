@@ -2160,12 +2160,20 @@ async function setupCloud(win, { githubToken, mailTo, resendKey } = {}) {
       // what stops GitHub's 60-day auto-disable of the schedule (see watch.yml).
       KEEPALIVE_PAT: githubToken,
     };
+    // If eBay was already configured locally, the same explicit cloud-setup action also enables its
+    // read-only email job. The Cert ID is decrypted only here, sealed to GitHub's repo public key,
+    // uploaded as an Actions Secret and never sent to the renderer or persisted in plaintext.
+    const ebayCredentials = readEbayCredentials();
+    if (ebayCredentials.clientId && ebayCredentials.clientSecret) {
+      secrets.EBAY_CLIENT_ID = ebayCredentials.clientId;
+      secrets.EBAY_CERT_ID = ebayCredentials.clientSecret;
+    }
     for (const [name, value] of Object.entries(secrets)) {
       const encrypted_value = await encryptSecret(pk.key, value);
       const r = await ghReq(githubToken, 'PUT', `/repos/${fork}/actions/secrets/${name}`, { encrypted_value, key_id: pk.key_id });
       if (r.status !== 201 && r.status !== 204) throw new Error('Could not store the ' + name + ' setting (HTTP ' + r.status + ').');
     }
-    step('secrets', 'ok');
+    step('secrets', 'ok', secrets.EBAY_CERT_ID ? 'Discogs + email + eBay' : 'Discogs + email');
 
     // 4. Switch the sweep on. Workflows in a fork start disabled; enable just ours, then fire the
     // first run so the user sees it working (and gets the first email batch) without waiting for
@@ -2188,14 +2196,49 @@ async function setupCloud(win, { githubToken, mailTo, resendKey } = {}) {
     // job is the 24/7 email. (cronRepo() reads settings.githubRepo first, so the pill lights up.)
     writeSettings({ ...readSettings(), githubRepo: fork });
     step('done', 'ok', fork);
-    return { ok: true, fork, url: `https://github.com/${fork}/actions` };
+    return { ok: true, fork, url: `https://github.com/${fork}/actions`, ebayEmail: !!secrets.EBAY_CERT_ID };
   } finally {
     cloudSetupRunning = false;
   }
 }
 
+let ebayCloudSetupRunning = false;
+async function setupEbayCloud({ githubToken } = {}) {
+  if (ebayCloudSetupRunning) throw new Error('eBay cloud setup is already running.');
+  ebayCloudSetupRunning = true;
+  try {
+    githubToken = String(githubToken || '').trim();
+    if (!githubToken) throw new Error('Paste a GitHub token first.');
+    const credentials = readEbayCredentials();
+    if (!credentials.clientId || !credentials.clientSecret) throw new Error('Save the eBay App ID and Cert ID locally first.');
+    const configuredFork = String(readSettings().githubRepo || '').trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '');
+    if (!configuredFork) throw new Error('Set up “24/7 email alerts” first, then connect eBay email.');
+
+    const me = await ghReq(githubToken, 'GET', '/user');
+    if (me.status === 401) throw new Error('GitHub rejected the token (401).');
+    if (me.status !== 200 || !me.data || !me.data.login) throw new Error('Could not reach GitHub (HTTP ' + me.status + ').');
+    const fork = await findExistingFork(githubToken, me.data.login);
+    if (!fork || fork.toLowerCase() !== configuredFork.toLowerCase()) throw new Error('The token does not have access to your configured cloud watcher (' + configuredFork + ').');
+
+    const keyResponse = await ghReq(githubToken, 'GET', `/repos/${fork}/actions/secrets/public-key`);
+    if (keyResponse.status !== 200 || !keyResponse.data || !keyResponse.data.key) throw new Error('Could not load the cloud watcher encryption key (HTTP ' + keyResponse.status + ').');
+    for (const [name, value] of Object.entries({ EBAY_CLIENT_ID: credentials.clientId, EBAY_CERT_ID: credentials.clientSecret })) {
+      const encrypted_value = await encryptSecret(keyResponse.data.key, value);
+      const response = await ghReq(githubToken, 'PUT', `/repos/${fork}/actions/secrets/${name}`, { encrypted_value, key_id: keyResponse.data.key_id });
+      if (response.status !== 201 && response.status !== 204) throw new Error('Could not store the ' + name + ' setting (HTTP ' + response.status + ').');
+    }
+    const dispatch = await ghReq(githubToken, 'POST', `/repos/${fork}/actions/workflows/${CRON_WORKFLOW}/dispatches`, { ref: 'main' });
+    if (dispatch.status !== 204) throw new Error('Credentials are stored, but starting the first scan failed (HTTP ' + dispatch.status + ').');
+    return { ok: true, fork, url: `https://github.com/${fork}/actions` };
+  } finally { ebayCloudSetupRunning = false; }
+}
+
 ipcMain.handle('cloud:setup', async (e, opts) => {
   try { return await setupCloud(BrowserWindow.fromWebContents(e.sender), opts || {}); }
+  catch (err) { return { ok: false, error: err && err.message ? err.message : String(err) }; }
+});
+ipcMain.handle('ebay:cloudSetup', async (_e, opts) => {
+  try { return await setupEbayCloud(opts || {}); }
   catch (err) { return { ok: false, error: err && err.message ? err.message : String(err) }; }
 });
 

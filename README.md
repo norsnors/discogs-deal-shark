@@ -69,7 +69,8 @@ requests. Results and sold medians are cached locally so later scans can reuse r
 - Tracks exact-listing price drops and relists over time.
 - Explains why a result was selected instead of showing an unexplained score.
 - Can refresh in the background while the desktop app is open.
-- Supports optional 24/7 cloud alerts through your own GitHub account.
+- Supports optional 24/7 Discogs and eBay email alerts through your own GitHub account. eBay mail
+  uses the official read-only Browse API and only sends pressing-verified matches.
 
 ## Privacy and safety
 
@@ -79,6 +80,8 @@ requests. Results and sold medians are cached locally so later scans can reuse r
 - Scout changes your wantlist only after an explicit **Add to wantlist** click.
 - City Dig never loads store listings until you explicitly press **Load first 100 from every store**.
 - The optional cloud watcher runs in your own accounts and can be disabled independently.
+- eBay developer credentials are required only for eBay scans; the integration never bids, buys,
+  sends offers or messages.
 
 ## Development
 

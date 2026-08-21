@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('api', {
   ebaySetEnabled: (enabled) => ipcRenderer.invoke('ebay:setEnabled', !!enabled),
   ebayConfigure: (options) => ipcRenderer.invoke('ebay:configure', options || {}),
   ebayScanNow: () => ipcRenderer.invoke('ebay:scanNow'),
+  ebayCloudSetup: (options) => ipcRenderer.invoke('ebay:cloudSetup', options || {}),
   onEbayUpdate: (cb) => {
     const h = (_e, m) => cb(m);
     ipcRenderer.on('ebay:update', h);

@@ -2281,6 +2281,7 @@ async function openEbaySettings() {
   $('ebay-postal-code').value = settings.ebayPostalCode || '';
   $('ebay-client-id').value = credentials.clientId || '';
   $('ebay-client-secret').value = '';
+  $('ebay-cloud-github').value = '';
   $('ebay-client-secret').placeholder = credentials.hasSecret ? 'saved securely — leave blank to keep' : 'paste once; encrypted on save';
   if (credentials.encryptionAvailable === false) {
     result.textContent = 'Secure credential storage is unavailable; the Cert ID cannot be saved on this computer.';
@@ -2288,6 +2289,23 @@ async function openEbaySettings() {
   }
   $('ebay-modal').classList.remove('hidden');
   $('ebay-client-id').focus();
+}
+
+async function connectEbayCloudEmail() {
+  const result = $('ebay-test-result');
+  const githubToken = $('ebay-cloud-github').value.trim();
+  if (!githubToken) { result.textContent = 'Paste the GitHub token for your existing cloud watcher first.'; result.className = 'test-result bad'; return; }
+  $('ebay-cloud-connect').disabled = true;
+  result.textContent = 'Encrypting the saved eBay credentials for your GitHub watcher…'; result.className = 'test-result';
+  try {
+    const response = await window.api.ebayCloudSetup({ githubToken });
+    if (!response || !response.ok) throw new Error(response && response.error || 'Could not connect eBay cloud email.');
+    $('ebay-cloud-github').value = '';
+    result.textContent = `✓ eBay email connected to ${response.fork}. The first cloud scan learns existing listings and sends no historical alerts.`;
+    result.className = 'test-result ok';
+  } catch (error) {
+    result.textContent = 'Failed: ' + (error && error.message ? error.message : String(error)); result.className = 'test-result bad';
+  } finally { $('ebay-cloud-connect').disabled = false; }
 }
 function closeEbaySettings() { $('ebay-modal').classList.add('hidden'); }
 function collectEbayOptions() {
@@ -2555,6 +2573,7 @@ async function runCloudSetup() {
     });
     if (r && r.ok) {
       el.textContent = `✓ Done! Your cloud watcher (${r.fork}) is live and running its first scan now. `
+        + (r.ebayEmail ? 'Strict eBay email is connected too; its first run only learns existing listings. ' : '')
         + 'Deal emails start arriving after it has watched your wantlist for a few scans (it learns normal prices first). '
         + 'GitHub runs it roughly every 1–1.5 hours. Check your spam folder for the first email.';
       el.className = 'test-result ok';
@@ -2829,6 +2848,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('ebay-cancel').addEventListener('click', closeEbaySettings);
   $('ebay-save').addEventListener('click', () => saveEbaySetup(false));
   $('ebay-test-btn').addEventListener('click', () => saveEbaySetup(true));
+  $('ebay-cloud-connect').addEventListener('click', connectEbayCloudEmail);
   $('ebay-keys-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://developer.ebay.com/my/keys'); });
   $('ebay-access-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://developer.ebay.com/api-docs/buy/static/buy-requirements.html'); });
   $('set-tradera-btn').addEventListener('click', openTraderaSettings);

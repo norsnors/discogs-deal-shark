@@ -4,6 +4,7 @@
 #
 # Setup: push this folder to a GitHub repo, then add repo Secrets:
 #   DISCOGS_TOKEN, DISCOGS_USERNAME, RESEND_API_KEY, MAIL_TO (riminiexpressdj@gmail.com), MAIL_FROM
+# Optional eBay email: EBAY_CLIENT_ID + EBAY_CERT_ID (production keyset, official read-only Browse API)
 #
 # Minutes note: scheduled runs cost Actions minutes on PRIVATE repos (2000/mo free). Each run is
 # short (no npm install needed for the Resend path). */15 ≈ within free tier; raise the interval if
@@ -131,3 +132,43 @@ jobs:
           else
             echo "Recent activity present; no keepalive commit needed."
           fi
+
+  # A separate short job starts immediately, so eBay alerts do not wait for the long budgeted
+  # Discogs sweep. Missing eBay secrets are an intentional clean skip for forks that use Discogs only.
+  ebay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Restore eBay cursor, dedupe and email outbox
+        uses: actions/cache@v6
+        with:
+          path: |
+            state/ebay-state.json
+            state/ebay-email-pending.json
+          key: ddw-ebay-state-${{ github.run_id }}
+          restore-keys: ddw-ebay-state-
+
+      - name: Scan eBay and email strict pressing matches
+        env:
+          DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
+          DISCOGS_USERNAME: ${{ secrets.DISCOGS_USERNAME }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CERT_ID: ${{ secrets.EBAY_CERT_ID }}
+          EBAY_MARKETPLACE: EBAY_NL
+          EBAY_DELIVERY_COUNTRY: NL
+          EBAY_BATCH_SIZE: '10'
+          MODE: balanced
+          MIN_REFERENCE: '25'
+          SHIPPING_ESTIMATE: '5'
+        run: node watch-ebay-once.js

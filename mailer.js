@@ -184,6 +184,123 @@ function renderGemsEmail(gems) {
   return { subject, text, html };
 }
 
+function ebayTitle(record) {
+  return `${record.artist ? record.artist + ' – ' : ''}${record.title || record.listingTitle || 'eBay listing'}`;
+}
+
+function ebayLandedPrice(record) {
+  const item = Number(record.itemPrice ?? record.lowest);
+  const exactShipping = record.shipping == null ? null : Number(record.shipping);
+  const estimatedShipping = record.shippingEstimate == null ? null : Number(record.shippingEstimate);
+  const shipping = Number.isFinite(exactShipping) ? exactShipping : (Number.isFinite(estimatedShipping) ? estimatedShipping : 0);
+  return {
+    item: Number.isFinite(item) ? item : 0,
+    shipping,
+    total: (Number.isFinite(item) ? item : 0) + shipping,
+    estimated: !Number.isFinite(exactShipping),
+  };
+}
+
+function ebayCostText(record) {
+  const landed = ebayLandedPrice(record);
+  const currency = record.currency || 'EUR';
+  const shippingLabel = landed.estimated ? 'estimated shipping' : 'shipping + import';
+  const totalLabel = landed.estimated ? 'estimated total' : 'total delivered';
+  return `${fmtPrice(landed.item, currency)} item + ${fmtPrice(landed.shipping, currency)} ${shippingLabel} = ${fmtPrice(landed.total, currency)} ${totalLabel}`;
+}
+
+// These renderers only receive official Browse API results that passed the conservative pressing
+// matcher. The comparison uses the exact pressing's sold median and the delivered cost.
+function renderEbayDealsEmail(deals) {
+  const n = deals.length;
+  const first = deals[0];
+  const firstLanded = ebayLandedPrice(first);
+  const subject = n === 1
+    ? `💸 eBay deal: ${ebayTitle(first)} — ${fmtPrice(firstLanded.total, first.currency)} (${pct(first.discount)} off)`
+    : `💸 ${n} eBay deals — incl. ${ebayTitle(first)} (${pct(first.discount)} off)`;
+  const textRows = deals.map((record) => [
+    `• ${ebayTitle(record)}`,
+    `  ${ebayCostText(record)}`,
+    `  ${pct(record.discount)} under ${fmtPrice(record.reference, record.currency)} real sold median`,
+    record.itemCondition ? `  eBay condition: ${record.itemCondition} — verify media and sleeve details on the listing` : '  Verify media and sleeve condition on the listing',
+    '  Pressing matched against Discogs release metadata',
+    `  View: ${record.url || record.listingUrl}`,
+  ].join('\n'));
+  const text = `${n} strict eBay deal${n > 1 ? 's' : ''} matched to your Discogs wantlist:\n\n${textRows.join('\n\n')}\n`;
+  const cards = deals.map((record) => {
+    const landed = ebayLandedPrice(record);
+    const currency = record.currency || 'EUR';
+    const thumb = record.thumb
+      ? `<img src="${esc(record.thumb)}" alt="" width="64" height="64" style="border-radius:6px;object-fit:cover;margin-right:12px">` : '';
+    return `
+      <tr><td style="padding:14px 0;border-bottom:1px solid #eee">
+        <table role="presentation" width="100%"><tr>
+          <td width="64" valign="top">${thumb}</td>
+          <td valign="top">
+            <div style="font-size:16px;font-weight:600;color:#111">${esc(ebayTitle(record))}</div>
+            <div style="margin:6px 0">
+              <span style="font-size:20px;font-weight:700;color:#1a7f37">${esc(fmtPrice(landed.total, currency))}</span>
+              <span style="font-size:13px;color:#555;margin-left:8px">${esc(landed.estimated ? 'estimated total' : 'total delivered')} · ${esc(pct(record.discount))} under ${esc(fmtPrice(record.reference, currency))} sold median</span>
+            </div>
+            <div style="font-size:12px;color:#666">${esc(ebayCostText(record))}</div>
+            <div style="font-size:12px;color:#666;margin-top:4px">Pressing matched against Discogs metadata. ${esc(record.itemCondition ? `eBay says “${record.itemCondition}”; verify media and sleeve details.` : 'Verify media and sleeve condition on the listing.')}</div>
+            <a href="${esc(record.url || record.listingUrl)}" style="display:inline-block;margin-top:10px;background:#3665f3;color:#fff;text-decoration:none;padding:8px 16px;border-radius:6px;font-size:14px;font-weight:600">View listing on eBay →</a>
+          </td>
+        </tr></table>
+      </td></tr>`;
+  }).join('');
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:560px;margin:0 auto;color:#111">
+    <h2 style="font-size:18px;margin:0 0 4px">${n} strict eBay deal${n > 1 ? 's' : ''}</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 12px">Official eBay Browse API · exact pressing matched to your Discogs wantlist · total includes known delivery/import charges. Always verify condition before buying.</p>
+    <table role="presentation" width="100%">${cards}</table>
+  </div>`;
+  return { subject, text, html };
+}
+
+function renderEbayGemsEmail(gems) {
+  const n = gems.length;
+  const first = gems[0];
+  const firstLanded = ebayLandedPrice(first);
+  const subject = n === 1
+    ? `💎 Rare eBay find: ${ebayTitle(first)} — ${fmtPrice(firstLanded.total, first.currency)} delivered`
+    : `💎 ${n} rare wantlist pressings appeared on eBay`;
+  const textRows = gems.map((record) => [
+    `• ${ebayTitle(record)}`,
+    '  A verified copy appeared after the scan previously found none',
+    `  ${ebayCostText(record)} (price is not a gate for rare-find alerts)`,
+    record.reference != null ? `  Real sold median: ${fmtPrice(record.reference, record.currency)}` : null,
+    '  Verify media and sleeve condition on the listing',
+    `  View: ${record.url || record.listingUrl}`,
+  ].filter(Boolean).join('\n'));
+  const text = `${n} rare eBay pressing${n > 1 ? 's' : ''} from your wantlist just became available:\n\n${textRows.join('\n\n')}\n`;
+  const cards = gems.map((record) => {
+    const landed = ebayLandedPrice(record);
+    const currency = record.currency || 'EUR';
+    const thumb = record.thumb
+      ? `<img src="${esc(record.thumb)}" alt="" width="64" height="64" style="border-radius:6px;object-fit:cover;margin-right:12px">` : '';
+    return `
+      <tr><td style="padding:14px 0;border-bottom:1px solid #eee">
+        <table role="presentation" width="100%"><tr>
+          <td width="64" valign="top">${thumb}</td>
+          <td valign="top">
+            <div style="font-size:16px;font-weight:600;color:#111">${esc(ebayTitle(record))}</div>
+            <div style="font-size:13px;color:#7c3aed;font-weight:600;margin:4px 0">💎 A pressing-verified copy appeared after none were found</div>
+            <div style="font-size:20px;font-weight:700;color:#111;margin:6px 0">${esc(fmtPrice(landed.total, currency))} <span style="font-size:12px;color:#888;font-weight:400">${esc(landed.estimated ? 'estimated total' : 'total delivered')} · price unfiltered</span></div>
+            <div style="font-size:12px;color:#666">${esc(ebayCostText(record))}</div>
+            <div style="font-size:12px;color:#666;margin-top:4px">Verify media and sleeve condition on the listing.</div>
+            <a href="${esc(record.url || record.listingUrl)}" style="display:inline-block;margin-top:10px;background:#7c3aed;color:#fff;text-decoration:none;padding:8px 16px;border-radius:6px;font-size:14px;font-weight:600">View listing on eBay →</a>
+          </td>
+        </tr></table>
+      </td></tr>`;
+  }).join('');
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:560px;margin:0 auto;color:#111">
+    <h2 style="font-size:18px;margin:0 0 4px">💎 ${n} rare eBay pressing${n > 1 ? 's' : ''} now available</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 12px">The exact pressing was matched against Discogs metadata. Price is deliberately unfiltered for rare-find alerts; always verify condition.</p>
+    <table role="presentation" width="100%">${cards}</table>
+  </div>`;
+  return { subject, text, html };
+}
+
 const RESEND_DEFAULT_FROM = 'Discogs Deal Shark <onboarding@resend.dev>';
 
 // Pure: the JSON body sent to the Resend API. Exported for testing.
@@ -271,7 +388,7 @@ function makeMailer(cfg = {}) {
 
 // dealLine/recentSalesText are shared with telegram.js so both channels render identical
 // flags/labels/value-lines for a deal or gem.
-module.exports = { makeMailer, renderDealsEmail, renderGemsEmail, buildResendPayload, fmtPrice, dealLine, recentSalesText, fmtDateShort };
+module.exports = { makeMailer, renderDealsEmail, renderGemsEmail, renderEbayDealsEmail, renderEbayGemsEmail, ebayLandedPrice, buildResendPayload, fmtPrice, dealLine, recentSalesText, fmtDateShort };
 
 // --- tiny self-test (node mailer.js --selftest) ----------------------------
 if (require.main === module && process.argv.includes('--selftest')) {
@@ -329,6 +446,31 @@ if (require.main === module && process.argv.includes('--selftest')) {
   const trusted = renderDealsEmail([{ releaseId: 9, artist: 'A', title: 'B', lowest: 10, currency: 'EUR', reference: 40, referenceSource: 'sold-median', discount: 0.75, numForSale: 2, url: 'https://x' }]);
   assert.ok(!/estimate/.test(trusted.text), 'a sold-median (real) deal omits the estimate caveat');
   assert.ok(/real sold price/.test(trusted.text), 'and is labelled against the real sold price');
+
+  const ebay = renderEbayDealsEmail([{
+    id: 'ebay:123', artist: 'My Mine', title: 'Hypnotic Tango', itemPrice: 20, shipping: 7,
+    deliveryCost: 5, importCharges: 2, currency: 'EUR', reference: 60, discount: 0.55,
+    alertEligible: true, pressingVerified: true, itemCondition: 'Used',
+    url: 'https://www.ebay.nl/itm/123', thumb: 'https://i.ebayimg.com/123.jpg',
+  }]);
+  assert.ok(/eBay deal: My Mine – Hypnotic Tango/.test(ebay.subject), 'eBay deal subject identifies the pressing');
+  assert.ok(/€20\.00 item \+ €7\.00 shipping \+ import = €27\.00 total delivered/.test(ebay.text), 'eBay deal shows landed cost including import');
+  assert.ok(/real sold median/.test(ebay.text) && /Pressing matched/.test(ebay.text), 'eBay deal explains its strict reference and match');
+  assert.ok(/View listing on eBay/.test(ebay.html) && !/Discogs →/.test(ebay.html), 'eBay mail links to eBay without a Discogs buy button');
+
+  const ebayEstimated = renderEbayDealsEmail([{
+    id: 'ebay:124', artist: 'A', title: 'B', itemPrice: 10, shipping: null, shippingEstimate: 5,
+    currency: 'EUR', reference: 40, discount: 0.625, alertEligible: true, pressingVerified: true,
+    url: 'https://www.ebay.nl/itm/124',
+  }]);
+  assert.ok(/€15\.00 estimated total/.test(ebayEstimated.html) && /estimated shipping/.test(ebayEstimated.text), 'unknown eBay shipping is labelled as an estimate');
+
+  const ebayGem = renderEbayGemsEmail([{
+    id: 'ebay-gem:125', artist: 'Koto', title: 'Visitors', itemPrice: 80, shipping: 10,
+    currency: 'EUR', reference: 75, pressingVerified: true, url: 'https://www.ebay.nl/itm/125',
+  }]);
+  assert.ok(/Rare eBay find: Koto – Visitors/.test(ebayGem.subject), 'eBay rare-find subject identifies the pressing');
+  assert.ok(/price is not a gate/.test(ebayGem.text), 'rare-find mail explicitly keeps price unfiltered');
 
   // disabled mailer (no creds)
   assert.strictEqual(makeMailer({}).enabled, false);
