@@ -7,7 +7,10 @@ const path = require('path');
 const { rareGemTransition } = require('../vinted/policy');
 
 const VERSION = 2;
-const SECRET_KEY = /^(?:raw|rawResponse|rawPayload|authorization|token|access[_-]?token|refresh[_-]?token|headers?|clientSecret|certId)$/i;
+// eBay marketplace account deletion compliance: seller/user identifiers are not needed for deal
+// matching or alerts and must never enter persistent state. Keeping them in the recursive sanitizer
+// also migrates old cached records cleanly the next time state is read and saved.
+const SECRET_KEY = /^(?:raw|rawResponse|rawPayload|authorization|token|access[_-]?token|refresh[_-]?token|headers?|clientSecret|certId|seller|sellerFeedbackPercentage|username|userId|eiasToken)$/i;
 
 function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
 function sanitize(value, depth = 0) {
@@ -93,12 +96,13 @@ if (require.main === module && process.argv.includes('--selftest')) {
   const state = createEbayState(file);
   assert.strictEqual(state.markSeen('one'), true);
   assert.strictEqual(state.markSeen('one'), false);
-  state.addDeal({ id: 'ebay:1', rawPayload: { token: 'never' }, lowest: 10 });
+  state.addDeal({ id: 'ebay:1', rawPayload: { token: 'never' }, seller: 'private-seller', sellerFeedbackPercentage: 99.9, lowest: 10 });
   state.addMatch({ id: 'ebay:2', alertEligible: false, lowest: 20 });
   state.observeAvailability('a', false);
   assert.strictEqual(state.observeAvailability('a', true).transition.isRareGem, true);
   const disk = fs.readFileSync(file, 'utf8');
   assert.ok(!disk.includes('never') && !disk.includes('token'));
+  assert.ok(!disk.includes('private-seller') && !disk.includes('sellerFeedbackPercentage'), 'eBay user identifiers never persist');
   assert.strictEqual(state.get().matches.length, 1);
   console.log('ebay state selftest: OK');
 }
