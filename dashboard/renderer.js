@@ -2880,6 +2880,9 @@ async function boot() {
   if (!hasApi) { await setPlatform(activePlatform); refresh(); return; }
   let cfg = null; try { cfg = await window.api.getConfig(); } catch { cfg = null; }
   if (!cfg || !cfg.hasToken || !cfg.username) {
+    // Every marketplace match depends on Discogs release metadata. Keep the selector, body classes
+    // and copy in sync with the account wizard even when a previous session saved another platform.
+    await setPlatform('discogs');
     viewMode = 'scan';
     $('deals').innerHTML = '';
     $('empty').classList.remove('hidden');

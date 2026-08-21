@@ -75,6 +75,7 @@ for (const channel of ['scan:all', 'scan-all:update']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Unified scan IPC channel ${channel} is wired end-to-end`);
 }
 assert.ok(/function startAllScans\(/.test(renderer) && /window\.api\.scanAll\(\)/.test(renderer), 'renderer exposes one coordinated scan action');
+assert.ok(/if \(!cfg \|\| !cfg\.hasToken \|\| !cfg\.username\) \{[\s\S]*?await setPlatform\('discogs'\);[\s\S]*?openWizard\(true\);/.test(renderer), 'first-run wizard resets a saved marketplace view to Discogs before rendering');
 assert.ok(/activePlatform === 'vinted'/.test(renderer) && /activePlatform === 'ebay'/.test(renderer) && /activePlatform === 'tradera'/.test(renderer) && /activePlatform === 'marktplaats'/.test(renderer) && /setPlatform\(activePlatform\)/.test(renderer), 'renderer keeps first-class Vinted, eBay, Tradera and Marktplaats platform state');
 assert.ok(/safeStorage\.encryptString/.test(main) && !/clientSecret: credentials\.clientSecret/.test(preload), 'eBay Cert ID stays in encrypted main-process storage');
 assert.ok(/TRADERA_CREDENTIALS_FILE/.test(main) && /safeStorage\.encryptString/.test(main) && !/appKey: credentials\.appKey/.test(preload), 'Tradera App Key stays in encrypted main-process storage');
