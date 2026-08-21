@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 
-const ALL_SCAN_SOURCES = Object.freeze(['discogs', 'vinted', 'ebay', 'tradera']);
+const ALL_SCAN_SOURCES = Object.freeze(['discogs', 'vinted', 'ebay', 'tradera', 'marktplaats']);
 
 function publicStates(states) {
   return Object.fromEntries(ALL_SCAN_SOURCES.map((source) => [source, { ...states[source] }]));
@@ -69,6 +69,7 @@ if (require.main === module && process.argv.includes('--selftest')) {
         vinted: runner('vinted'),
         ebay: runner('ebay', true),
         tradera: { skipReason: 'credentials missing' },
+        marktplaats: runner('marktplaats'),
       },
       onUpdate: (update) => updates.push(update),
     });
@@ -77,6 +78,7 @@ if (require.main === module && process.argv.includes('--selftest')) {
     assert.strictEqual(result.sources.vinted.status, 'done');
     assert.strictEqual(result.sources.ebay.status, 'error');
     assert.strictEqual(result.sources.tradera.status, 'skipped');
+    assert.strictEqual(result.sources.marktplaats.status, 'done');
     assert.deepStrictEqual(result.failures, ['ebay']);
     assert.ok(updates.some((update) => update.sources.discogs.status === 'running'));
     assert.strictEqual(updates.at(-1).running, false);

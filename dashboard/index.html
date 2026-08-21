@@ -40,7 +40,7 @@
     </details>
 
     <div class="actions">
-      <button id="btn-scan-all" class="scan all-scan" title="Start Discogs, Vinted, eBay and Tradera together; unavailable sources are skipped">
+      <button id="btn-scan-all" class="scan all-scan" title="Start Discogs, Vinted, eBay, Tradera and Marktplaats together; unavailable sources are skipped">
         <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Scan all</span>
       </button>
@@ -66,6 +66,7 @@
         <span id="scan-all-vinted" data-state="queued">Vinted Â· waiting</span>
         <span id="scan-all-ebay" data-state="queued">eBay Â· waiting</span>
         <span id="scan-all-tradera" data-state="queued">Tradera Â· waiting</span>
+        <span id="scan-all-marktplaats" data-state="queued">Marktplaats Â· waiting</span>
       </div>
       <div class="scanbar-track"><div class="scanbar-fill" id="scan-fill"></div></div>
     </div>
@@ -81,6 +82,7 @@
           <option value="vinted">Vinted</option>
           <option value="ebay">eBay</option>
           <option value="tradera">Tradera</option>
+          <option value="marktplaats">Marktplaats</option>
         </select>
       </div>
       <div class="platform-context" id="platform-context" aria-live="polite">
@@ -192,6 +194,39 @@
         <span class="vinted-status-item"><span>Next scan</span><b id="tradera-next-scan">—</b></span>
         <span class="vinted-status-item"><span>API today</span><b id="tradera-api-calls">0 / 9,500</b></span>
         <span class="vinted-status-message" id="tradera-status-message" aria-live="polite">Add your Tradera developer credentials to connect the official API.</span>
+      </div>
+    </section>
+
+    <section id="marktplaats-panel" class="vinted-panel marktplaats-panel hidden" aria-label="Marktplaats API controls">
+      <div class="vinted-panel-copy">
+        <div class="vinted-kicker">MARKTPLAATS · OFFICIAL API V2</div>
+        <h3>Wantlist scanner</h3>
+        <p>Search fixed-price Marktplaats ads through the official API, verify the exact Discogs pressing and compare asking price plus your shipping estimate with sold medians. Only strict deals trigger desktop alerts.</p>
+      </div>
+      <div class="vinted-panel-controls">
+        <label class="switch-row vinted-switch" for="marktplaats-enabled">
+          <input type="checkbox" id="marktplaats-enabled" />
+          <span aria-hidden="true"></span>
+          <b>Background watch</b>
+        </label>
+        <button id="marktplaats-scan-now" class="primary vinted-scan-now" type="button">Scan Marktplaats now</button>
+        <button id="marktplaats-configure" class="ghost vinted-backfill" type="button">API settings</button>
+        <label class="vinted-interval" for="marktplaats-poll-interval">
+          <span>Polling</span>
+          <select id="marktplaats-poll-interval">
+            <option value="15">Every 15 min</option>
+            <option value="30" selected>Every 30 min</option>
+            <option value="60">Every 1 hour</option>
+            <option value="180">Every 3 hours</option>
+          </select>
+        </label>
+      </div>
+      <div class="vinted-panel-status">
+        <span class="vinted-health is-idle" id="marktplaats-health"><i aria-hidden="true"></i><b id="marktplaats-health-label">Setup needed</b></span>
+        <span class="vinted-status-item"><span>Last scan</span><b id="marktplaats-last-scan">Not yet</b></span>
+        <span class="vinted-status-item"><span>Next scan</span><b id="marktplaats-next-scan">—</b></span>
+        <span class="vinted-status-item"><span>Local budget</span><b id="marktplaats-api-calls">0 / 4,000</b></span>
+        <span class="vinted-status-message" id="marktplaats-status-message" aria-live="polite">Add API partner credentials assigned by Marktplaats to connect official search.</span>
       </div>
     </section>
 
@@ -366,6 +401,9 @@
       <label>Tradera REST API <span class="opt">(official API, encrypted App Key)</span>
         <button type="button" id="set-tradera-btn" class="ghost">Configure Tradera…</button>
       </label>
+      <label>Marktplaats API <span class="opt">(official API, encrypted Client Secret)</span>
+        <button type="button" id="set-marktplaats-btn" class="ghost">Configure Marktplaats…</button>
+      </label>
       <label>Background scan while open <span class="opt">(keeps sold-medians + the email watcher fresh)</span>
         <select id="set-autoScan">
           <option value="0">Off</option>
@@ -450,6 +488,38 @@
         <span class="spacer"></span>
         <button id="tradera-cancel" class="ghost">Cancel</button>
         <button id="tradera-save" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Marktplaats official API v2 setup -->
+  <div id="marktplaats-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Marktplaats API</h2>
+      <p class="hint">Use a Client ID and Client Secret assigned by Marktplaats for an approved API integration. The Client Secret is encrypted with Windows credential protection and never returned to this screen. Deal Shark only searches, reads ad details and opens original listings.</p>
+      <label>Client ID
+        <input type="text" id="marktplaats-client-id" autocomplete="off" spellcheck="false" placeholder="assigned by Marktplaats" />
+      </label>
+      <label>Client Secret
+        <input type="password" id="marktplaats-client-secret" autocomplete="new-password" spellcheck="false" placeholder="paste once; encrypted on save" />
+      </label>
+      <label>Category ID <span class="opt">(optional; blank searches all categories)</span>
+        <input type="text" inputmode="numeric" id="marktplaats-category-id" autocomplete="off" spellcheck="false" placeholder="leave blank unless Marktplaats supplied one" />
+      </label>
+      <label>Postcode <span class="opt">(optional location filter)</span>
+        <input type="text" id="marktplaats-postcode" autocomplete="postal-code" spellcheck="false" maxlength="7" placeholder="2011 AA" />
+      </label>
+      <label>Search radius
+        <select id="marktplaats-distance"><option value="25000">25 km</option><option value="50000">50 km</option><option value="100000" selected>100 km</option><option value="200000">200 km</option><option value="500000">All Netherlands</option></select>
+      </label>
+      <p class="hint">Marktplaats prices are EUR. Shipping is not part of the search result, so the dashboard uses your existing shipping estimate. Bids and non-fixed price models are ignored.</p>
+      <p class="hint"><a href="#" id="marktplaats-api-help">Read the official API documentation →</a><br /><a href="#" id="marktplaats-auth-help">Read how Marktplaats assigns OAuth credentials →</a></p>
+      <div id="marktplaats-test-result" class="test-result"></div>
+      <div class="modal-actions">
+        <button id="marktplaats-test-btn" class="ghost">Save &amp; test</button>
+        <span class="spacer"></span>
+        <button id="marktplaats-cancel" class="ghost">Cancel</button>
+        <button id="marktplaats-save" class="primary">Save</button>
       </div>
     </div>
   </div>

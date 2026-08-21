@@ -260,12 +260,16 @@ body.platform-ebay .platform-context-dot { background: #47c5d3; box-shadow: 0 0 
 body.platform-ebay .platform-context { color: #9ddbe2; }
 body.platform-tradera .platform-context-dot { background: #ffb648; box-shadow: 0 0 0 3px rgba(255,182,72,.1); }
 body.platform-tradera .platform-context { color: #ffd08a; }
+body.platform-marktplaats .platform-context-dot { background: #00a1e0; box-shadow: 0 0 0 3px rgba(0,161,224,.12); }
+body.platform-marktplaats .platform-context { color: #8bdcff; }
 body.platform-vinted #tab-scout, body.platform-vinted #tab-city,
 body.platform-ebay #tab-scout, body.platform-ebay #tab-city,
-body.platform-tradera #tab-scout, body.platform-tradera #tab-city { display: none; }
+body.platform-tradera #tab-scout, body.platform-tradera #tab-city,
+body.platform-marktplaats #tab-scout, body.platform-marktplaats #tab-city { display: none; }
 body.platform-vinted #svc-badge, body.platform-vinted .activity-menu, body.platform-vinted #btn-telegram,
 body.platform-ebay #svc-badge, body.platform-ebay .activity-menu, body.platform-ebay #btn-telegram,
-body.platform-tradera #svc-badge, body.platform-tradera .activity-menu, body.platform-tradera #btn-telegram { display: none; }
+body.platform-tradera #svc-badge, body.platform-tradera .activity-menu, body.platform-tradera #btn-telegram,
+body.platform-marktplaats #svc-badge, body.platform-marktplaats .activity-menu, body.platform-marktplaats #btn-telegram { display: none; }
 
 .vinted-panel {
   margin: 12px 22px 0;
@@ -287,6 +291,10 @@ body.platform-tradera #svc-badge, body.platform-tradera .activity-menu, body.pla
 .tradera-panel .vinted-kicker { color: #ffc970; }
 .tradera-panel .vinted-scan-now { background: #b76f16; }
 .tradera-panel .vinted-scan-now:hover { background: #d18425; }
+.marktplaats-panel { border-color: rgba(0,161,224,.3); background: linear-gradient(135deg, rgba(7,48,66,.92), rgba(9,22,31,.97)); }
+.marktplaats-panel .vinted-kicker { color: #73d7ff; }
+.marktplaats-panel .vinted-scan-now { background: #087dad; }
+.marktplaats-panel .vinted-scan-now:hover { background: #0b98cf; }
 .vinted-panel-copy { min-width: 0; }
 .vinted-kicker { color: #9eb9ff; font-size: 8.5px; font-weight: 850; letter-spacing: .15em; }
 .vinted-panel h3 { margin: 3px 0 3px; color: #eef3ff; font-size: 17px; line-height: 1.2; letter-spacing: -.015em; }

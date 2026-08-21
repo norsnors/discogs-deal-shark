@@ -22,7 +22,7 @@ for (const [id, count] of idCounts) assert.strictEqual(count, 1, `HTML id #${id}
 
 const preserved = [
   'tab-deals', 'tab-gems', 'tab-scout', 'tab-city', 'btn-scan-all', 'btn-fullscan', 'btn-scan-cancel', 'btn-settings', 'btn-telegram',
-  'scan-all-status', 'scan-all-discogs', 'scan-all-vinted', 'scan-all-ebay', 'scan-all-tradera',
+  'scan-all-status', 'scan-all-discogs', 'scan-all-vinted', 'scan-all-ebay', 'scan-all-tradera', 'scan-all-marktplaats',
   'svc-badge', 'pill-sweep', 'pill-cron', 'push-badge', 'pill-wantlist', 'pill-deals',
   'search', 'sort-control', 'minValue', 'minDiscount', 'maxTotal', 'shipEst', 'sortBy', 'vgPlusOnly',
   'freshOnly', 'showHidden', 'showNearMiss', 'settings-modal', 'cloud-modal', 'telegram-modal',
@@ -38,6 +38,11 @@ const preserved = [
   'tradera-panel', 'tradera-enabled', 'tradera-scan-now', 'tradera-configure', 'tradera-poll-interval', 'tradera-health',
   'tradera-health-label', 'tradera-last-scan', 'tradera-next-scan', 'tradera-api-calls', 'tradera-status-message',
   'tradera-modal', 'tradera-app-id', 'tradera-app-key', 'tradera-test-btn', 'tradera-save', 'tradera-cancel', 'set-tradera-btn',
+  'marktplaats-panel', 'marktplaats-enabled', 'marktplaats-scan-now', 'marktplaats-configure', 'marktplaats-poll-interval',
+  'marktplaats-health', 'marktplaats-health-label', 'marktplaats-last-scan', 'marktplaats-next-scan', 'marktplaats-api-calls',
+  'marktplaats-status-message', 'marktplaats-modal', 'marktplaats-client-id', 'marktplaats-client-secret',
+  'marktplaats-category-id', 'marktplaats-postcode', 'marktplaats-distance', 'marktplaats-test-btn', 'marktplaats-save',
+  'marktplaats-cancel', 'set-marktplaats-btn',
 ];
 for (const id of preserved) assert.strictEqual(idCounts.get(id), 1, `preserved feature #${id} missing`);
 
@@ -48,11 +53,12 @@ assert.ok(/id="sort-control"/.test(html) && /Lowest checkout price/.test(html), 
 assert.ok(/FILTER_STATE_KEY = 'ddw-filter-state-v3'/.test(renderer) && /minValue: '10', minDiscount: '25'/.test(renderer), 'new balanced dashboard defaults are versioned');
 assert.ok(/marketplaceDashboardRows\(next\.deals, next\.matches\)/.test(renderer) && /dashboard match · no alert/.test(renderer), 'official marketplace dashboard matches are visibly separate from alert deals');
 assert.ok(/id="tab-deals"/.test(html) && /id="tab-gems"/.test(html) && /id="tab-scout"/.test(html) && /id="tab-city"/.test(html), 'Deals, Rare gems, Scout and City Dig remain primary tabs');
-assert.ok(/id="platform-select"/.test(html) && /value="discogs"/.test(html) && /value="vinted"/.test(html) && /value="ebay"/.test(html) && /value="tradera"/.test(html), 'marketplace switch offers Discogs, Vinted, eBay and Tradera');
+assert.ok(/id="platform-select"/.test(html) && /value="discogs"/.test(html) && /value="vinted"/.test(html) && /value="ebay"/.test(html) && /value="tradera"/.test(html) && /value="marktplaats"/.test(html), 'marketplace switch offers Discogs, Vinted, eBay, Tradera and Marktplaats');
 const styles = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
 assert.ok(/body\.platform-vinted #tab-scout, body\.platform-vinted #tab-city/.test(styles), 'Discogs-only Scout and City Dig are hidden on Vinted');
 assert.ok(/body\.platform-ebay #tab-scout, body\.platform-ebay #tab-city/.test(styles), 'Discogs-only Scout and City Dig are hidden on eBay');
 assert.ok(/body\.platform-tradera #tab-scout, body\.platform-tradera #tab-city/.test(styles), 'Discogs-only Scout and City Dig are hidden on Tradera');
+assert.ok(/body\.platform-marktplaats #tab-scout, body\.platform-marktplaats #tab-city/.test(styles), 'Discogs-only Scout and City Dig are hidden on Marktplaats');
 for (const channel of ['vinted:snapshot', 'vinted:setEnabled', 'vinted:configure', 'vinted:scanNow', 'vinted:startBackfill', 'vinted:cancelBackfill']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Vinted IPC channel ${channel} is wired end-to-end`);
 }
@@ -62,13 +68,17 @@ for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:t
 for (const channel of ['tradera:credentialsStatus', 'tradera:saveCredentials', 'tradera:test', 'tradera:snapshot', 'tradera:setEnabled', 'tradera:configure', 'tradera:scanNow']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Tradera IPC channel ${channel} is wired end-to-end`);
 }
+for (const channel of ['marktplaats:credentialsStatus', 'marktplaats:saveCredentials', 'marktplaats:test', 'marktplaats:snapshot', 'marktplaats:setEnabled', 'marktplaats:configure', 'marktplaats:scanNow']) {
+  assert.ok(preload.includes(channel) && main.includes(channel), `Marktplaats IPC channel ${channel} is wired end-to-end`);
+}
 for (const channel of ['scan:all', 'scan-all:update']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Unified scan IPC channel ${channel} is wired end-to-end`);
 }
 assert.ok(/function startAllScans\(/.test(renderer) && /window\.api\.scanAll\(\)/.test(renderer), 'renderer exposes one coordinated scan action');
-assert.ok(/activePlatform === 'vinted'/.test(renderer) && /activePlatform === 'ebay'/.test(renderer) && /activePlatform === 'tradera'/.test(renderer) && /setPlatform\(activePlatform\)/.test(renderer), 'renderer keeps first-class Vinted, eBay and Tradera platform state');
+assert.ok(/activePlatform === 'vinted'/.test(renderer) && /activePlatform === 'ebay'/.test(renderer) && /activePlatform === 'tradera'/.test(renderer) && /activePlatform === 'marktplaats'/.test(renderer) && /setPlatform\(activePlatform\)/.test(renderer), 'renderer keeps first-class Vinted, eBay, Tradera and Marktplaats platform state');
 assert.ok(/safeStorage\.encryptString/.test(main) && !/clientSecret: credentials\.clientSecret/.test(preload), 'eBay Cert ID stays in encrypted main-process storage');
 assert.ok(/TRADERA_CREDENTIALS_FILE/.test(main) && /safeStorage\.encryptString/.test(main) && !/appKey: credentials\.appKey/.test(preload), 'Tradera App Key stays in encrypted main-process storage');
+assert.ok(/MARKTPLAATS_CREDENTIALS_FILE/.test(main) && /safeStorage\.encryptString/.test(main) && !/clientSecret: credentials\.clientSecret/.test(preload), 'Marktplaats Client Secret stays in encrypted main-process storage');
 assert.ok(/Content-Security-Policy/.test(html), 'renderer CSP remains present');
 assert.ok(/node_modules\/leaflet\/dist\/leaflet\.js/.test(html), 'interactive map engine is bundled locally');
 

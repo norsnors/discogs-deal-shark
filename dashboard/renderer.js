@@ -96,12 +96,13 @@ let scannedOnce = false;  // has a local scan run (or its results been loaded) t
 // the shared cards, search and value filters are reused. Future adapters only need another entry
 // here plus their own main-process IPC; Discogs-only tools remain separate tabs.
 const savedPlatform = (() => { try { return localStorage.getItem('deal-shark-platform'); } catch { return null; } })();
-let activePlatform = ['discogs', 'vinted', 'ebay', 'tradera'].includes(savedPlatform) ? savedPlatform : 'discogs';
+let activePlatform = ['discogs', 'vinted', 'ebay', 'tradera', 'marktplaats'].includes(savedPlatform) ? savedPlatform : 'discogs';
 const platformViews = {
   discogs: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'scan', scannedOnce: false },
   vinted: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'vinted', scannedOnce: false },
   ebay: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'ebay', scannedOnce: false },
   tradera: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'tradera', scannedOnce: false },
+  marktplaats: { deals: [], nearMisses: [], gems: { ts: null, gems: [], zeroWatch: [] }, viewMode: 'marktplaats', scannedOnce: false },
 };
 let vintedStatus = { enabled: false, running: false, health: 'idle', lastPollAt: null, nextPollAt: null, requestsLastHour: 0, message: null, backfill: { active: false, checked: 0, total: 0, listingsFound: 0 } };
 let vintedRefreshBusy = false;
@@ -109,7 +110,9 @@ let ebayStatus = { enabled: false, configured: false, running: false, health: 's
 let ebayRefreshBusy = false;
 let traderaStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 9500, message: null, progress: null, fx: null };
 let traderaRefreshBusy = false;
-const ALL_SCAN_LABELS = { discogs: 'Discogs', vinted: 'Vinted', ebay: 'eBay', tradera: 'Tradera' };
+let marktplaatsStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 4000, message: null, progress: null };
+let marktplaatsRefreshBusy = false;
+const ALL_SCAN_LABELS = { discogs: 'Discogs', vinted: 'Vinted', ebay: 'eBay', tradera: 'Tradera', marktplaats: 'Marktplaats' };
 let scanAllRunning = false;
 let scanAllSources = Object.fromEntries(Object.keys(ALL_SCAN_LABELS).map((source) => [source, { state: 'queued' }]));
 let scanAllCompletionTimer = null;
@@ -277,6 +280,7 @@ function updateViewCopy() {
   const vinted = activePlatform === 'vinted';
   const ebay = activePlatform === 'ebay';
   const tradera = activePlatform === 'tradera';
+  const marktplaats = activePlatform === 'marktplaats';
   if (vinted) {
     $('view-eyebrow').textContent = gems ? 'VINTED RARITY WATCH' : 'VINTED × YOUR WANTLIST';
     $('view-title').textContent = gems ? 'Wanted records that surfaced again' : 'Vinted deals before they disappear';
@@ -289,6 +293,10 @@ function updateViewCopy() {
     $('view-eyebrow').textContent = gems ? 'TRADERA RARITY WATCH' : 'TRADERA × YOUR WANTLIST';
     $('view-title').textContent = gems ? 'Wanted records newly available on Tradera' : 'Tradera deals worth opening';
     $('view-intro').textContent = gems ? 'An official Tradera API search found no matching fixed-price pressing, then a verified copy appeared.' : 'Fixed-price Tradera listings, pressing-matched to Discogs and converted from SEK with the ECB daily rate.';
+  } else if (marktplaats) {
+    $('view-eyebrow').textContent = gems ? 'MARKTPLAATS RARITY WATCH' : 'MARKTPLAATS × YOUR WANTLIST';
+    $('view-title').textContent = gems ? 'Wanted records newly available on Marktplaats' : 'Marktplaats deals worth opening';
+    $('view-intro').textContent = gems ? 'An official Marktplaats API search found no matching fixed-price ad, then a verified copy appeared.' : 'Fixed-price Marktplaats ads, pressing-matched to Discogs and ranked by asking price plus your shipping estimate.';
   } else {
     $('view-eyebrow').textContent = city ? 'DIG THE CITY' : (scout ? 'BEYOND YOUR WANTLIST' : (gems ? 'RARITY WATCH' : 'YOUR WANTLIST'));
     $('view-title').textContent = city ? 'Antwerp record stores, one inventory at a time' : (scout ? 'Scout valuable records you may be missing' : (gems ? 'Rare records that just surfaced' : 'Deals worth opening'));
@@ -420,11 +428,11 @@ function enrich(d) {
 // listing (green ✓ when VG+ or better) — the certainty the user asked for. For an unconfirmed
 // (cloud/API) deal it falls back to the old price-proxy ESTIMATE (≈), clearly marked as a guess.
 function conditionChip(d) {
-  if (d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera') {
+  if (d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera' || d.platform === 'marktplaats') {
     const condition = d.itemCondition ? ` · ${esc(d.itemCondition)}` : '';
     const evidence = Array.isArray(d.pressingEvidence) && d.pressingEvidence.length
       ? ` Evidence: ${d.pressingEvidence.join(', ')}.` : '';
-    const source = d.platform === 'ebay' ? 'eBay' : (d.platform === 'tradera' ? 'Tradera' : 'Vinted');
+    const source = d.platform === 'ebay' ? 'eBay' : (d.platform === 'tradera' ? 'Tradera' : (d.platform === 'marktplaats' ? 'Marktplaats' : 'Vinted'));
     return `<span class="tag good" title="Matched to a concrete Discogs pressing from ${source}.${esc(evidence)} Media grade is not verified.">✓ pressing matched${condition}</span>`;
   }
   if (d.conditionConfirmed && d.mediaCondition) {
@@ -506,7 +514,7 @@ function card(d) {
   // Shipping line. A scan-confirmed copy carries the REAL shipping Discogs charges to ship to us
   // (shown plainly, no "est."); a cloud/unconfirmed deal has no per-copy shipping, so it falls back
   // to the slider estimate — clearly marked "(est.)" so the two are never confused.
-  const itemTxt = (d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera') && d.itemPrice != null
+  const itemTxt = (d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera' || d.platform === 'marktplaats') && d.itemPrice != null
     ? `${money(d.itemPrice, d.currency)} item${d.serviceFee ? ` + ${money(d.serviceFee, d.currency)} buyer protection` : ''}`
     : `${money(d.lowest, d.currency)} item`;
   const shippingLabel = d.importCharges > 0 ? 'delivery/import' : 'shipping';
@@ -530,7 +538,7 @@ function card(d) {
     ? `<div class="note">↑ or ${money(d.altPrice, d.currency)} for a ${esc(gradeShort(d.altGrade))} copy${d.altUrl ? ` <a class="altlink" data-url="${esc(d.altUrl)}" href="#">view</a>` : ''}</div>` : '';
   const buyLabel = d.platform === 'vinted'
     ? 'Open this listing on Vinted &rarr;'
-    : (d.platform === 'ebay' ? 'Open this listing on eBay &rarr;' : (d.platform === 'tradera' ? 'Open this listing on Tradera &rarr;' : (d.listingUrl ? 'Buy this copy on Discogs &rarr;' : 'View &amp; buy on Discogs &rarr;')));
+    : (d.platform === 'ebay' ? 'Open this listing on eBay &rarr;' : (d.platform === 'tradera' ? 'Open this listing on Tradera &rarr;' : (d.platform === 'marktplaats' ? 'Open this ad on Marktplaats &rarr;' : (d.listingUrl ? 'Buy this copy on Discogs &rarr;' : 'View &amp; buy on Discogs &rarr;'))));
   // The alerted price is gone from the marketplace — state the fact, no guessing about why.
   const gone = d._gone
     ? `<span class="tag gone" title="The cloud watcher's latest check shows this price is no longer on the marketplace">⌛ no longer listed — ${d.current && d.current.lowest != null ? `cheapest is now ${money(d.current.lowest, d.currency)}` : 'no copies for sale'}</span>` : '';
@@ -539,7 +547,7 @@ function card(d) {
     : '';
   return `<article class="card${d.freshListing ? ' is-fresh' : ''}${d.conditionConfirmed ? ' is-verified' : ''}${isHidden ? ' is-hidden' : ''}${d._gone ? ' is-gone' : ''}${dashboardOnly ? ' is-dashboard-match' : ''}">
     ${dismissBtn}
-    <span class="when">${d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera' ? ago(d.ts) : (viewMode === 'scan' ? 'live' : ago(d.ts))}</span>
+    <span class="when">${d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera' || d.platform === 'marktplaats' ? ago(d.ts) : (viewMode === 'scan' ? 'live' : ago(d.ts))}</span>
     ${thumb}
     <div class="body">
       <p class="title">${esc(d.title || 'Release ' + d.releaseId)}</p>
@@ -645,10 +653,10 @@ function gemCard(g) {
     : '';
   const gemSignal = g.platform === 'vinted'
     ? '💎 absent in a targeted search — now surfaced'
-    : (g.platform === 'ebay' ? '💎 absent on eBay — now surfaced' : (g.platform === 'tradera' ? '💎 absent on Tradera — now surfaced' : `💎 was 0 for sale — ${appeared}`));
+    : (g.platform === 'ebay' ? '💎 absent on eBay — now surfaced' : (g.platform === 'tradera' ? '💎 absent on Tradera — now surfaced' : (g.platform === 'marktplaats' ? '💎 absent on Marktplaats — now surfaced' : `💎 was 0 for sale — ${appeared}`)));
   const buyLabel = g.platform === 'vinted'
     ? 'Open this listing on Vinted &rarr;'
-    : (g.platform === 'ebay' ? 'Open this listing on eBay &rarr;' : (g.platform === 'tradera' ? 'Open this listing on Tradera &rarr;' : (g.gone ? 'View release on Discogs &rarr;' : 'View &amp; buy on Discogs &rarr;')));
+    : (g.platform === 'ebay' ? 'Open this listing on eBay &rarr;' : (g.platform === 'tradera' ? 'Open this listing on Tradera &rarr;' : (g.platform === 'marktplaats' ? 'Open this ad on Marktplaats &rarr;' : (g.gone ? 'View release on Discogs &rarr;' : 'View &amp; buy on Discogs &rarr;'))));
   return `<article class="card is-gem${g.gone ? ' is-gone' : ''}">
     <span class="when">${g.ts ? ago(g.ts) : ''}</span>
     ${thumb}
@@ -657,7 +665,7 @@ function gemCard(g) {
       <p class="artist">${esc(g.artist || '')}${g.year ? ` · ${esc(String(g.year))}` : ''}</p>
       ${goneBanner}
       <div class="meta"><span class="tag gem">${gemSignal}</span>${live}</div>
-      <div class="price-row"><span class="price gem-price">${money(g.lowest, g.currency)}</span><span class="gem-ask">${g.gone ? 'was asking — gone now' : (g.platform === 'vinted' ? 'at detection — open to verify' : (g.platform === 'ebay' ? 'item price from eBay API' : (g.platform === 'tradera' ? 'fixed price converted from SEK' : 'asking price — unfiltered')))}</span></div>
+      <div class="price-row"><span class="price gem-price">${money(g.lowest, g.currency)}</span><span class="gem-ask">${g.gone ? 'was asking — gone now' : (g.platform === 'vinted' ? 'at detection — open to verify' : (g.platform === 'ebay' ? 'item price from eBay API' : (g.platform === 'tradera' ? 'fixed price converted from SEK' : (g.platform === 'marktplaats' ? 'fixed asking price from Marktplaats API' : 'asking price — unfiltered'))))}</span></div>
       ${ref}
       <button class="buy gembuy" data-url="${esc(g.url)}">${buyLabel}</button>
     </div>
@@ -668,7 +676,7 @@ function zwRow(r) {
   const name = `${r.artist ? r.artist + ' – ' : ''}${r.title || 'Release ' + r.releaseId}`;
   const targetUrl = activePlatform === 'vinted'
     ? (r.url || `https://www.vinted.nl/catalog?search_text=${encodeURIComponent(`${r.artist || ''} ${r.title || ''}`.trim())}&catalog_ids=3041`)
-    : (activePlatform === 'ebay' ? (r.url || `https://www.ebay.nl/sch/i.html?_nkw=${encodeURIComponent(`${r.artist || ''} ${r.title || ''} vinyl`.trim())}`) : (activePlatform === 'tradera' ? (r.url || `https://www.tradera.com/search?q=${encodeURIComponent(`${r.artist || ''} ${r.title || ''} vinyl`.trim())}`) : `https://www.discogs.com/release/${r.releaseId}`));
+    : (activePlatform === 'ebay' ? (r.url || `https://www.ebay.nl/sch/i.html?_nkw=${encodeURIComponent(`${r.artist || ''} ${r.title || ''} vinyl`.trim())}`) : (activePlatform === 'tradera' ? (r.url || `https://www.tradera.com/search?q=${encodeURIComponent(`${r.artist || ''} ${r.title || ''} vinyl`.trim())}`) : (activePlatform === 'marktplaats' ? (r.url || `https://www.marktplaats.nl/q/${encodeURIComponent(`${r.artist || ''} ${r.title || ''} vinyl`.trim())}/`) : `https://www.discogs.com/release/${r.releaseId}`)));
   return `<div class="zw-row">
     <span class="zw-dot"></span>
     <span class="zw-title" title="${esc(name)}">${esc(name)}</span>
@@ -698,20 +706,22 @@ function renderGems() {
               ? 'No eBay rare gems yet. Once the API has confirmed a pressing has no matching listing, its next appearance surfaces here.'
               : (activePlatform === 'tradera'
                   ? 'No Tradera rare gems yet. Once the API has confirmed a pressing has no matching fixed-price listing, its next appearance surfaces here.'
-                  : 'No rare gems yet. Once your wantlist has been swept, releases with ZERO copies for sale are watched here — and the moment the first copy appears it shows up (and lands in your inbox), whatever the price.')));
+                  : (activePlatform === 'marktplaats'
+                      ? 'No Marktplaats rare gems yet. Once the API has confirmed a pressing has no matching fixed-price ad, its next appearance surfaces here.'
+                      : 'No rare gems yet. Once your wantlist has been swept, releases with ZERO copies for sale are watched here — and the moment the first copy appears it shows up (and lands in your inbox), whatever the price.'))));
     return;
   }
   empty.classList.add('hidden');
 
   let html = '';
   if (gems.length) {
-    html += `<div class="gems-head">💎 Rare appearances — ${activePlatform === 'vinted' ? 'a matching Vinted listing surfaced after a confirmed empty search' : (activePlatform === 'ebay' ? 'a matching eBay listing surfaced after a confirmed empty API search' : (activePlatform === 'tradera' ? 'a matching fixed-price Tradera listing surfaced after a confirmed empty API search' : 'the first copy showed up after none at all'))}</div>`;
+    html += `<div class="gems-head">💎 Rare appearances — ${activePlatform === 'vinted' ? 'a matching Vinted listing surfaced after a confirmed empty search' : (activePlatform === 'ebay' ? 'a matching eBay listing surfaced after a confirmed empty API search' : (activePlatform === 'tradera' ? 'a matching fixed-price Tradera listing surfaced after a confirmed empty API search' : (activePlatform === 'marktplaats' ? 'a matching fixed-price Marktplaats ad surfaced after a confirmed empty API search' : 'the first copy showed up after none at all')))}</div>`;
     html += gems.map(gemCard).join('');
   } else if (!q) {
     html += `<div class="gems-head muted">💎 No rare appearances yet — the list below is being watched. The moment a first copy shows up it lands here and in your inbox, whatever the price.</div>`;
   }
   if (zw.length) {
-    html += `<div class="zw-head">👁 Watching ${zw.length} wantlist release${zw.length === 1 ? '' : 's'} with <b>no matching ${activePlatform === 'vinted' ? 'Vinted listing' : (activePlatform === 'ebay' ? 'eBay listing' : (activePlatform === 'tradera' ? 'fixed-price Tradera listing' : 'copies for sale'))}</b> — the moment one appears it alerts, at any price</div>`;
+    html += `<div class="zw-head">👁 Watching ${zw.length} wantlist release${zw.length === 1 ? '' : 's'} with <b>no matching ${activePlatform === 'vinted' ? 'Vinted listing' : (activePlatform === 'ebay' ? 'eBay listing' : (activePlatform === 'tradera' ? 'fixed-price Tradera listing' : (activePlatform === 'marktplaats' ? 'fixed-price Marktplaats ad' : 'copies for sale')))}</b> — the moment one appears it alerts, at any price</div>`;
     html += `<div class="zw-list">${zw.map(zwRow).join('')}</div>`;
   }
   wrap.innerHTML = html;
@@ -750,6 +760,7 @@ async function refreshGems() {
   if (activePlatform === 'vinted') { await refreshVintedSnapshot(); return; }
   if (activePlatform === 'ebay') { await refreshEbaySnapshot(); return; }
   if (activePlatform === 'tradera') { await refreshTraderaSnapshot(); return; }
+  if (activePlatform === 'marktplaats') { await refreshMarktplaatsSnapshot(); return; }
   if (!hasApi) {
     platformViews.discogs.gems = DEMO_GEMS;
     if (activePlatform === 'discogs') { gemsData = DEMO_GEMS; updateGemsBadge(); if (activeTab === 'gems') render(); }
@@ -1540,8 +1551,79 @@ async function refreshTraderaSnapshot() {
   finally { traderaRefreshBusy = false; }
 }
 
+function normalizeMarktplaatsSnapshot(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  const status = input.status && typeof input.status === 'object' ? input.status : {};
+  const progress = status.progress && typeof status.progress === 'object' ? status.progress : null;
+  return {
+    status: {
+      enabled: !!status.enabled,
+      configured: !!status.configured,
+      running: !!status.running,
+      health: status.health || (status.configured ? 'idle' : 'setup'),
+      pollMinutes: Number(status.pollMinutes) || 30,
+      lastPollAt: status.lastPollAt || null,
+      nextPollAt: status.nextPollAt || null,
+      callsToday: Math.max(0, Number(status.callsToday) || 0),
+      dailyLimit: Math.max(1, Number(status.dailyLimit) || 4000),
+      targetCount: Math.max(0, Number(status.targetCount) || 0),
+      progress,
+      lastRunStats: status.lastRunStats && typeof status.lastRunStats === 'object' ? status.lastRunStats : null,
+      message: status.message || null,
+      error: status.error || null,
+    },
+    deals: Array.isArray(input.deals) ? input.deals : [],
+    matches: Array.isArray(input.matches) ? input.matches : [],
+    gems: normalizeGems(input.gems),
+  };
+}
+
+function renderMarktplaatsStatus() {
+  const s = marktplaatsStatus || {};
+  $('marktplaats-enabled').checked = !!s.enabled;
+  if ([...$('marktplaats-poll-interval').options].some((option) => Number(option.value) === Number(s.pollMinutes))) $('marktplaats-poll-interval').value = String(s.pollMinutes);
+  const health = $('marktplaats-health');
+  health.className = 'vinted-health ' + (s.health === 'error' ? 'is-error' : (s.running ? 'is-scanning' : (s.health === 'live' ? 'is-live' : (s.configured ? 'is-idle' : 'is-paused'))));
+  $('marktplaats-health-label').textContent = s.health === 'error' ? 'Error' : (s.running ? 'Scanning' : (s.health === 'live' ? 'Live' : (s.configured ? (s.enabled ? 'Ready' : 'Connected') : 'Setup needed')));
+  $('marktplaats-last-scan').textContent = s.lastPollAt ? ago(s.lastPollAt) : 'Not yet';
+  $('marktplaats-next-scan').textContent = s.enabled && s.nextPollAt ? until(s.nextPollAt) : '—';
+  $('marktplaats-api-calls').textContent = `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 4000).toLocaleString()}`;
+  const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
+  const completed = !s.running ? marketplaceScanSummary(s.lastRunStats) : '';
+  $('marktplaats-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official API v2 ready.' : 'Add API partner credentials assigned by Marktplaats.')}${completed ? ` ${completed}` : ''}`;
+  $('marktplaats-scan-now').disabled = !!s.running || !s.configured || scanAllRunning;
+  $('marktplaats-enabled').disabled = !s.configured;
+}
+
+function notifyMarktplaats(items, kind = 'deal') {
+  if (!Array.isArray(items) || !items.length || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const item = items[0]; const extra = items.length > 1 ? ` (+${items.length - 1} more)` : '';
+  const title = kind === 'gem' ? `💎 Marktplaats rare gem: ${item.artist || ''} – ${item.title || ''}` : `💸 Marktplaats deal: ${money(item.lowest, item.currency)} (${pct(item.discount)} off)`;
+  const notification = new Notification(title, { body: `${item.artist || ''} – ${item.title || ''}${extra}` });
+  notification.onclick = () => { openUrl(item.url); window.focus(); };
+}
+
+function applyMarktplaatsSnapshot(value, { notify = false } = {}) {
+  const next = normalizeMarktplaatsSnapshot(value);
+  marktplaatsStatus = next.status;
+  platformViews.marktplaats = { deals: marketplaceDashboardRows(next.deals, next.matches), nearMisses: [], gems: next.gems, viewMode: 'marktplaats', scannedOnce: !!next.status.lastPollAt };
+  if (activePlatform === 'marktplaats') restorePlatformView('marktplaats');
+  renderMarktplaatsStatus(); updateGemsBadge();
+  syncMarketplaceAllScan('marktplaats', next.status);
+  if (activePlatform === 'marktplaats') render();
+  if (notify && value) { notifyMarktplaats(value.newDeals, 'deal'); notifyMarktplaats(value.newGems, 'gem'); }
+}
+
+async function refreshMarktplaatsSnapshot() {
+  if (!hasApi || !window.api.marktplaatsSnapshot || marktplaatsRefreshBusy) return;
+  marktplaatsRefreshBusy = true;
+  try { applyMarktplaatsSnapshot(await window.api.marktplaatsSnapshot()); }
+  catch (error) { marktplaatsStatus = { ...marktplaatsStatus, health: 'error', error: error && error.message ? error.message : String(error) }; renderMarktplaatsStatus(); }
+  finally { marktplaatsRefreshBusy = false; }
+}
+
 async function setPlatform(platform) {
-  const next = ['discogs', 'vinted', 'ebay', 'tradera'].includes(platform) ? platform : 'discogs';
+  const next = ['discogs', 'vinted', 'ebay', 'tradera', 'marktplaats'].includes(platform) ? platform : 'discogs';
   if (next !== activePlatform) {
     stashPlatformView();
     activePlatform = next;
@@ -1552,16 +1634,18 @@ async function setPlatform(platform) {
   document.body.classList.toggle('platform-vinted', activePlatform === 'vinted');
   document.body.classList.toggle('platform-ebay', activePlatform === 'ebay');
   document.body.classList.toggle('platform-tradera', activePlatform === 'tradera');
+  document.body.classList.toggle('platform-marktplaats', activePlatform === 'marktplaats');
   $('platform-select').value = activePlatform;
   $('platform-context-label').textContent = activePlatform === 'vinted'
     ? 'Anonymous newest-listings feed · matching and history stay on this PC'
-    : (activePlatform === 'ebay' ? 'Official Browse API · exact pressing match · landed-cost comparison' : (activePlatform === 'tradera' ? 'Official REST v4 · fixed price only · ECB currency conversion' : 'Wantlist, sold medians and connected sellers'));
+    : (activePlatform === 'ebay' ? 'Official Browse API · exact pressing match · landed-cost comparison' : (activePlatform === 'tradera' ? 'Official REST v4 · fixed price only · ECB currency conversion' : (activePlatform === 'marktplaats' ? 'Official API v2 · fixed price only · exact pressing match' : 'Wantlist, sold medians and connected sellers')));
   $('vinted-panel').classList.toggle('hidden', activePlatform !== 'vinted');
   $('ebay-panel').classList.toggle('hidden', activePlatform !== 'ebay');
   $('tradera-panel').classList.toggle('hidden', activePlatform !== 'tradera');
+  $('marktplaats-panel').classList.toggle('hidden', activePlatform !== 'marktplaats');
   $('btn-fullscan').querySelector('span').textContent = `${ALL_SCAN_LABELS[activePlatform]} only`;
   $('btn-fullscan').title = activePlatform === 'vinted' ? 'Check the Vinted newest feed now'
-    : (activePlatform === 'ebay' ? 'Search the official eBay Browse API for every wantlist pressing' : (activePlatform === 'tradera' ? 'Search the official Tradera REST API for every wantlist pressing' : 'Scan the full wantlist with real condition, shipping and fresh sold medians'));
+    : (activePlatform === 'ebay' ? 'Search the official eBay Browse API for every wantlist pressing' : (activePlatform === 'tradera' ? 'Search the official Tradera REST API for every wantlist pressing' : (activePlatform === 'marktplaats' ? 'Search the official Marktplaats API for every wantlist pressing' : 'Scan the full wantlist with real condition, shipping and fresh sold medians')));
   $('vgPlusOnly').closest('.switch-row').classList.toggle('hidden', activePlatform !== 'discogs');
   $('showNearMiss').closest('.switch-row').classList.toggle('hidden', activePlatform !== 'discogs');
   updateGemsBadge();
@@ -1569,6 +1653,7 @@ async function setPlatform(platform) {
   if (activePlatform === 'vinted') await refreshVintedSnapshot();
   else if (activePlatform === 'ebay') await refreshEbaySnapshot();
   else if (activePlatform === 'tradera') await refreshTraderaSnapshot();
+  else if (activePlatform === 'marktplaats') await refreshMarktplaatsSnapshot();
   else { refreshGems(); render(); }
 }
 
@@ -1666,14 +1751,14 @@ function render() {
   }, 0);
   const hiddenNote = hiddenCount ? ` · ${hiddenCount} hidden` : '';
   const vgNote = vgHidden ? ` · ${vgHidden} hidden by “VG+ only”` : '';
-  const officialMarketplace = activePlatform === 'ebay' || activePlatform === 'tradera';
+  const officialMarketplace = activePlatform === 'ebay' || activePlatform === 'tradera' || activePlatform === 'marktplaats';
   const alertDealCount = allDeals.filter((deal) => deal.alertEligible !== false).length;
   const dashboardMatchCount = Math.max(0, allDeals.length - alertDealCount);
   $('pill-deals').textContent = officialMarketplace
     ? `${alertDealCount} alert deal${alertDealCount === 1 ? '' : 's'}${dashboardMatchCount ? ` · ${dashboardMatchCount} dashboard` : ''}`
     : `${allDeals.length} deal${allDeals.length === 1 ? '' : 's'}`;
   const verifyNote = activePlatform === 'discogs' && verifyInfo.running ? ` · ✓ checking listings ${Math.min(verifyInfo.done + 1, verifyInfo.total)}/${verifyInfo.total}…` : '';
-  const sourceNote = activePlatform === 'vinted' ? ' · Vinted sniper' : (activePlatform === 'ebay' ? ' · eBay Browse API' : (activePlatform === 'tradera' ? ' · Tradera REST v4' : (viewMode === 'scan' ? ' · live scan' : '')));
+  const sourceNote = activePlatform === 'vinted' ? ' · Vinted sniper' : (activePlatform === 'ebay' ? ' · eBay Browse API' : (activePlatform === 'tradera' ? ' · Tradera REST v4' : (activePlatform === 'marktplaats' ? ' · Marktplaats API v2' : (viewMode === 'scan' ? ' · live scan' : ''))));
   const marketplaceBreakdown = officialMarketplace ? ` · ${alertDealCount} alert eligible` : '';
   $('resultCount').textContent = (deals.length || verifyNote) ? `${deals.length} shown of ${allDeals.length}${marketplaceBreakdown}${hiddenNote}${vgNote}${sourceNote}${verifyNote}` : '';
   if (!deals.length && !misses.length && !goneDeals.length) {
@@ -1693,11 +1778,13 @@ function render() {
               ? (ebayStatus.running ? 'The official eBay API is scanning your wantlist.' : (ebayStatus.configured ? (marketplaceScanSummary(ebayStatus.lastRunStats) || 'No safe eBay pressing matches yet. Run a scan or enable background watch.') : 'Configure your eBay App ID and Cert ID to start.'))
               : (activePlatform === 'tradera'
                   ? (traderaStatus.running ? 'The official Tradera API is scanning your wantlist.' : (traderaStatus.configured ? (marketplaceScanSummary(traderaStatus.lastRunStats) || 'No safe fixed-price Tradera pressing matches yet. Run a scan or enable background watch.') : 'Configure your Tradera App ID and App Key to start.'))
-                  : (viewMode === 'scan'
+                  : (activePlatform === 'marktplaats'
+                      ? (marktplaatsStatus.running ? 'The official Marktplaats API is scanning your wantlist.' : (marktplaatsStatus.configured ? (marketplaceScanSummary(marktplaatsStatus.lastRunStats) || 'No safe fixed-price Marktplaats pressing matches yet. Run a scan or enable background watch.') : 'Configure the Client ID and Client Secret assigned by Marktplaats to start.'))
+                      : (viewMode === 'scan'
           ? (scannedOnce
               ? 'Scan finished — no confirmed VG+ copies meet your discount threshold right now.'
               : 'No scan yet. Hit ⚡ Full scan to sweep your wantlist for verified-VG+ bargains.')
-          : 'No deals yet — hit ⚡ Full scan.'))));
+          : 'No deals yet — hit ⚡ Full scan.')))));
     return;
   }
   empty.classList.add('hidden');
@@ -1972,7 +2059,7 @@ function renderAllScanStatus(finalText = '') {
   $('scan-all-status').classList.remove('hidden');
   $('scan-fill').style.width = `${Math.round((finishedCount / Object.keys(ALL_SCAN_LABELS).length) * 100)}%`;
   if (finalText) $('scan-text').textContent = finalText;
-  else if (scanAllRunning) $('scan-text').textContent = `Scanning all available marketplaces · ${finishedCount}/4 finished${runningCount ? ` · ${runningCount} active` : ''}`;
+  else if (scanAllRunning) $('scan-text').textContent = `Scanning all available marketplaces · ${finishedCount}/${Object.keys(ALL_SCAN_LABELS).length} finished${runningCount ? ` · ${runningCount} active` : ''}`;
 }
 
 function onAllScanUpdate(message) {
@@ -2059,6 +2146,7 @@ async function startAllScans() {
     if (results.vinted) applyVintedSnapshot(results.vinted);
     if (results.ebay) applyEbaySnapshot(results.ebay);
     if (results.tradera) applyTraderaSnapshot(results.tradera);
+    if (results.marktplaats) applyMarktplaatsSnapshot(results.marktplaats);
     const states = Object.values(scanAllSources).map((item) => item.status || item.state);
     const completed = states.filter((state) => state === 'done').length;
     const skipped = states.filter((state) => state === 'skipped').length;
@@ -2069,7 +2157,7 @@ async function startAllScans() {
   } finally {
     scanAllRunning = false;
     setScanUI(false);
-    renderVintedStatus(); renderEbayStatus(); renderTraderaStatus();
+    renderVintedStatus(); renderEbayStatus(); renderTraderaStatus(); renderMarktplaatsStatus();
     $('scanbar').classList.remove('hidden');
     $('scan-all-status').classList.remove('hidden');
     $('btn-scan-cancel').textContent = 'Stop';
@@ -2118,6 +2206,17 @@ async function startScan(opts = {}) {
     renderTraderaStatus();
     try { applyTraderaSnapshot(await window.api.traderaScanNow(), { notify: true }); }
     catch (error) { traderaStatus = { ...traderaStatus, running: false, health: 'error', error: error && error.message ? error.message : String(error) }; renderTraderaStatus(); }
+    return;
+  }
+  if (activePlatform === 'marktplaats') {
+    if (!hasApi || !window.api.marktplaatsScanNow || marktplaatsStatus.running || !marktplaatsStatus.configured) {
+      if (!marktplaatsStatus.configured) openMarktplaatsSettings();
+      return;
+    }
+    marktplaatsStatus = { ...marktplaatsStatus, running: true, health: 'scanning', progress: { checked: 0, total: marktplaatsStatus.targetCount || 0 } };
+    renderMarktplaatsStatus();
+    try { applyMarktplaatsSnapshot(await window.api.marktplaatsScanNow(), { notify: true }); }
+    catch (error) { marktplaatsStatus = { ...marktplaatsStatus, running: false, health: 'error', error: error && error.message ? error.message : String(error) }; renderMarktplaatsStatus(); }
     return;
   }
   if (!hasApi) { alert('Local scan needs the desktop app (run it with npm start).'); return; }
@@ -2393,6 +2492,69 @@ async function saveTraderaSetup(runTest = false) {
   } catch (error) {
     result.textContent = 'Failed: ' + (error && error.message ? error.message : String(error)); result.className = 'test-result bad'; return false;
   } finally { $('tradera-test-btn').disabled = false; $('tradera-save').disabled = false; }
+}
+
+async function openMarktplaatsSettings() {
+  closeSettings();
+  const result = $('marktplaats-test-result'); result.textContent = ''; result.className = 'test-result';
+  let credentials = {}; let settings = {};
+  if (hasApi) {
+    [credentials, settings] = await Promise.all([
+      window.api.marktplaatsCredentialsStatus().catch(() => ({})),
+      window.api.getSettings().catch(() => ({})),
+    ]);
+  }
+  $('marktplaats-client-id').value = credentials.clientId || '';
+  $('marktplaats-client-secret').value = '';
+  $('marktplaats-client-secret').placeholder = credentials.hasSecret ? 'saved securely — leave blank to keep' : 'paste once; encrypted on save';
+  $('marktplaats-category-id').value = settings.marktplaatsCategoryId || '';
+  $('marktplaats-postcode').value = settings.marktplaatsPostcode || '';
+  const distance = String(settings.marktplaatsDistance || 100000);
+  $('marktplaats-distance').value = [...$('marktplaats-distance').options].some((option) => option.value === distance) ? distance : '100000';
+  if (credentials.encryptionAvailable === false) {
+    result.textContent = 'Secure credential storage is unavailable; the Client Secret cannot be saved on this computer.';
+    result.className = 'test-result bad';
+  }
+  $('marktplaats-modal').classList.remove('hidden');
+  $('marktplaats-client-id').focus();
+}
+function closeMarktplaatsSettings() { $('marktplaats-modal').classList.add('hidden'); }
+function collectMarktplaatsOptions() {
+  return {
+    categoryId: $('marktplaats-category-id').value.trim(),
+    postcode: $('marktplaats-postcode').value.replace(/\s+/g, '').toUpperCase(),
+    distance: Number($('marktplaats-distance').value) || 100000,
+  };
+}
+async function saveMarktplaatsSetup(runTest = false) {
+  const result = $('marktplaats-test-result');
+  if (!hasApi) { result.textContent = 'Demo mode (no Electron bridge).'; return false; }
+  const clientId = $('marktplaats-client-id').value.trim();
+  const clientSecret = $('marktplaats-client-secret').value.trim();
+  const options = collectMarktplaatsOptions();
+  if (!clientId) { result.textContent = 'Enter the Client ID assigned by Marktplaats first.'; result.className = 'test-result bad'; return false; }
+  if (options.categoryId && !/^\d+$/.test(options.categoryId)) { result.textContent = 'Category ID must be numeric or blank.'; result.className = 'test-result bad'; return false; }
+  if (options.postcode && !/^\d{4}[A-Z]{2}$/.test(options.postcode)) { result.textContent = 'Use a Dutch postcode such as 2011AA, or leave it blank.'; result.className = 'test-result bad'; return false; }
+  result.textContent = runTest ? 'Saving securely and testing Marktplaats…' : 'Saving securely…'; result.className = 'test-result';
+  $('marktplaats-test-btn').disabled = true; $('marktplaats-save').disabled = true;
+  try {
+    await window.api.marktplaatsSaveCredentials({ clientId, clientSecret });
+    await window.api.marktplaatsConfigure(options);
+    $('marktplaats-client-secret').value = '';
+    $('marktplaats-client-secret').placeholder = 'saved securely — leave blank to keep';
+    if (runTest) {
+      const response = await window.api.marktplaatsTest();
+      if (!response || !response.ok) throw new Error(response && response.error || 'Marktplaats connection test failed.');
+      result.textContent = `✓ Connected to Marktplaats API v2. Search returned ${Number(response.sampleItems || 0)} sample item${Number(response.sampleItems || 0) === 1 ? '' : 's'} (${Number(response.total || 0).toLocaleString()} total).`;
+      result.className = 'test-result ok';
+      await refreshMarktplaatsSnapshot();
+    } else {
+      closeMarktplaatsSettings(); await refreshMarktplaatsSnapshot();
+    }
+    return true;
+  } catch (error) {
+    result.textContent = 'Failed: ' + (error && error.message ? error.message : String(error)); result.className = 'test-result bad'; return false;
+  } finally { $('marktplaats-test-btn').disabled = false; $('marktplaats-save').disabled = false; }
 }
 
 // 💎 Recent-sales-for-gems login status: reflects whether the Sales History page is unlocked.
@@ -2833,6 +2995,20 @@ window.addEventListener('DOMContentLoaded', () => {
     try { applyTraderaSnapshot(await window.api.traderaConfigure({ pollMinutes: Number($('tradera-poll-interval').value) })); }
     catch (error) { traderaStatus = { ...traderaStatus, health: 'error', error: error.message }; renderTraderaStatus(); }
   });
+  $('marktplaats-scan-now').addEventListener('click', () => startScan());
+  $('marktplaats-configure').addEventListener('click', openMarktplaatsSettings);
+  $('marktplaats-enabled').addEventListener('change', async () => {
+    if (!hasApi || !window.api.marktplaatsSetEnabled) return;
+    $('marktplaats-enabled').disabled = true;
+    try { applyMarktplaatsSnapshot(await window.api.marktplaatsSetEnabled($('marktplaats-enabled').checked)); }
+    catch (error) { marktplaatsStatus = { ...marktplaatsStatus, health: 'error', error: error.message }; renderMarktplaatsStatus(); }
+    finally { $('marktplaats-enabled').disabled = !marktplaatsStatus.configured; }
+  });
+  $('marktplaats-poll-interval').addEventListener('change', async () => {
+    if (!hasApi || !window.api.marktplaatsConfigure) return;
+    try { applyMarktplaatsSnapshot(await window.api.marktplaatsConfigure({ pollMinutes: Number($('marktplaats-poll-interval').value) })); }
+    catch (error) { marktplaatsStatus = { ...marktplaatsStatus, health: 'error', error: error.message }; renderMarktplaatsStatus(); }
+  });
   $('btn-scan-cancel').addEventListener('click', () => { if (hasApi) window.api.scrapeCancel(); $('scan-text').textContent = 'Stopping…'; });
   $('btn-settings').addEventListener('click', openSettings);
   $('svc-badge').addEventListener('click', () => { const u = $('svc-badge').dataset.url; if (u) openUrl(u); });
@@ -2857,6 +3033,12 @@ window.addEventListener('DOMContentLoaded', () => {
   $('tradera-test-btn').addEventListener('click', () => saveTraderaSetup(true));
   $('tradera-register-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.tradera.com/'); });
   $('tradera-api-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.tradera.com/documentation/rest-getting-started'); });
+  $('set-marktplaats-btn').addEventListener('click', openMarktplaatsSettings);
+  $('marktplaats-cancel').addEventListener('click', closeMarktplaatsSettings);
+  $('marktplaats-save').addEventListener('click', () => saveMarktplaatsSetup(false));
+  $('marktplaats-test-btn').addEventListener('click', () => saveMarktplaatsSetup(true));
+  $('marktplaats-api-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.marktplaats.nl/docs/v2/'); });
+  $('marktplaats-auth-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.marktplaats.nl/docs/v2/authentication.html'); });
 
   // ☁ Cloud setup wizard
   $('set-cloud-btn').addEventListener('click', openCloud);
@@ -2898,6 +3080,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if (hasApi && window.api.onVintedUpdate) window.api.onVintedUpdate((message) => applyVintedSnapshot(message, { notify: true }));
   if (hasApi && window.api.onEbayUpdate) window.api.onEbayUpdate((message) => applyEbaySnapshot(message, { notify: true }));
   if (hasApi && window.api.onTraderaUpdate) window.api.onTraderaUpdate((message) => applyTraderaSnapshot(message, { notify: true }));
+  if (hasApi && window.api.onMarktplaatsUpdate) window.api.onMarktplaatsUpdate((message) => applyMarktplaatsSnapshot(message, { notify: true }));
   if (hasApi) window.api.onScoutProgress(onScoutProgress);
   if (hasApi && window.api.onCityDigProgress) window.api.onCityDigProgress(onCityDigProgress);
   if (hasApi && window.api.onVerifyProgress) window.api.onVerifyProgress((m) => {

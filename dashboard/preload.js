@@ -65,6 +65,19 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('tradera:update', h);
     return () => ipcRenderer.removeListener('tradera:update', h);
   },
+  // Marktplaats: official OAuth2 API v2. The Client Secret is write-only from the renderer.
+  marktplaatsCredentialsStatus: () => ipcRenderer.invoke('marktplaats:credentialsStatus'),
+  marktplaatsSaveCredentials: (credentials) => ipcRenderer.invoke('marktplaats:saveCredentials', credentials || {}),
+  marktplaatsTest: () => ipcRenderer.invoke('marktplaats:test'),
+  marktplaatsSnapshot: () => ipcRenderer.invoke('marktplaats:snapshot'),
+  marktplaatsSetEnabled: (enabled) => ipcRenderer.invoke('marktplaats:setEnabled', !!enabled),
+  marktplaatsConfigure: (options) => ipcRenderer.invoke('marktplaats:configure', options || {}),
+  marktplaatsScanNow: () => ipcRenderer.invoke('marktplaats:scanNow'),
+  onMarktplaatsUpdate: (cb) => {
+    const h = (_e, m) => cb(m);
+    ipcRenderer.on('marktplaats:update', h);
+    return () => ipcRenderer.removeListener('marktplaats:update', h);
+  },
   // Scout: discover valuable vinyl outside the current wantlist by Discogs genre/style.
   scoutRun: (opts) => ipcRenderer.invoke('scout:run', opts),
   scoutCancel: () => ipcRenderer.invoke('scout:cancel'),

@@ -31,6 +31,8 @@ const { createEbayClient } = require('./ebay/client');
 const { createEbayService } = require('./ebay/service');
 const { createTraderaClient } = require('./tradera/client');
 const { createTraderaService } = require('./tradera/service');
+const { createMarktplaatsClient } = require('./marktplaats/client');
+const { createMarktplaatsService } = require('./marktplaats/service');
 const { runAllScans } = require('./all-scan');
 
 // Preserve settings for users upgrading from Deal Watcher. Electron derives a new user-data folder
@@ -115,6 +117,14 @@ const DEFAULT_SETTINGS = {
   traderaEnabled: false,
   traderaPollMinutes: 30,
   traderaBatchSize: 5,
+  // Marktplaats uses approved API-partner OAuth client credentials. The Client Secret is encrypted
+  // separately; search, detail and original-listing links are the only capabilities used.
+  marktplaatsEnabled: false,
+  marktplaatsPollMinutes: 30,
+  marktplaatsBatchSize: 5,
+  marktplaatsCategoryId: '',
+  marktplaatsPostcode: '',
+  marktplaatsDistance: 100000,
 };
 
 function readSettings() {
@@ -197,6 +207,39 @@ function writeTraderaCredentials({ appId, appKey } = {}) {
   const record = { appId: id, secret: safeStorage.encryptString(key).toString('base64'), updatedAt: Date.now() };
   fs.writeFileSync(TRADERA_CREDENTIALS_FILE(), JSON.stringify(record), { encoding: 'utf8', mode: 0o600 });
   return traderaCredentialStatus();
+}
+
+const MARKTPLAATS_CREDENTIALS_FILE = () => path.join(app.getPath('userData'), 'marktplaats-credentials.json');
+function readMarktplaatsCredentialRecord() {
+  try { return JSON.parse(fs.readFileSync(MARKTPLAATS_CREDENTIALS_FILE(), 'utf8')); } catch { return {}; }
+}
+function readMarktplaatsCredentials() {
+  const record = readMarktplaatsCredentialRecord();
+  let clientSecret = '';
+  if (record.secret && safeStorage.isEncryptionAvailable()) {
+    try { clientSecret = safeStorage.decryptString(Buffer.from(String(record.secret), 'base64')); } catch { clientSecret = ''; }
+  }
+  return { clientId: String(record.clientId || ''), clientSecret };
+}
+function marktplaatsCredentialStatus() {
+  const record = readMarktplaatsCredentialRecord();
+  const credentials = readMarktplaatsCredentials();
+  return {
+    clientId: String(record.clientId || ''),
+    hasSecret: !!credentials.clientSecret,
+    encryptionAvailable: safeStorage.isEncryptionAvailable(),
+    updatedAt: record.updatedAt || null,
+  };
+}
+function writeMarktplaatsCredentials({ clientId, clientSecret } = {}) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure credential storage is not available on this computer. The Marktplaats Client Secret was not saved.');
+  const current = readMarktplaatsCredentials();
+  const id = String(clientId || current.clientId || '').trim();
+  const secret = String(clientSecret || current.clientSecret || '').trim();
+  if (!id || !secret) throw new Error('Both Marktplaats Client ID and Client Secret are required.');
+  const record = { clientId: id, secret: safeStorage.encryptString(secret).toString('base64'), updatedAt: Date.now() };
+  fs.writeFileSync(MARKTPLAATS_CREDENTIALS_FILE(), JSON.stringify(record), { encoding: 'utf8', mode: 0o600 });
+  return marktplaatsCredentialStatus();
 }
 
 function withTimeout(ms) {
@@ -1890,6 +1933,69 @@ async function testTraderaConnection() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Marktplaats adapter — official read-only API v2 + pressing-aware wantlist matching.
+// ---------------------------------------------------------------------------
+let marktplaatsService = null;
+let marktplaatsDiscogsClient = null;
+let marktplaatsDiscogsToken = null;
+function getMarktplaatsDiscogsClient(config) {
+  if (!marktplaatsDiscogsClient || marktplaatsDiscogsToken !== config.token) {
+    const { makeClient } = loadWatcher();
+    marktplaatsDiscogsClient = makeClient({
+      token: config.token,
+      userAgent: `DiscogsDealShark/${app.getVersion()} (Marktplaats pressing matcher)`,
+      minIntervalMs: 1100,
+    });
+    marktplaatsDiscogsToken = config.token;
+  }
+  return marktplaatsDiscogsClient;
+}
+async function loadMarktplaatsReleaseMetadata(releaseId, config) {
+  const { makeStore } = loadWatcher();
+  const store = makeStore(stateDir());
+  const cached = store.getReleaseMeta(releaseId);
+  if (cached && Array.isArray(cached.formats) && Array.isArray(cached.labels)
+    && Date.now() - (Number(cached.ts) || 0) < 180 * 24 * 60 * 60 * 1000) return cached;
+  const metadata = await getMarktplaatsDiscogsClient(config).getRelease(releaseId);
+  if (metadata) store.setReleaseMeta(releaseId, { ...metadata, ts: Date.now() });
+  return metadata;
+}
+function getMarktplaatsService() {
+  if (marktplaatsService) return marktplaatsService;
+  marktplaatsService = createMarktplaatsService({
+    stateFile: path.join(app.getPath('userData'), 'marktplaats-state.json'),
+    readSettings,
+    writeSettings: (patch) => writeSettings({ ...readSettings(), ...(patch || {}) }),
+    readConfig: readConfigFile,
+    getCredentials: readMarktplaatsCredentials,
+    loadWantlist: async (config) => getMarktplaatsDiscogsClient(config).getWantlist(config.username),
+    loadMedians: async () => localRealMedians(),
+    loadReleaseMetadata: loadMarktplaatsReleaseMetadata,
+    emit: (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('marktplaats:update', payload);
+    },
+  });
+  return marktplaatsService;
+}
+async function testMarktplaatsConnection() {
+  try {
+    const settings = readSettings();
+    const client = createMarktplaatsClient(readMarktplaatsCredentials());
+    const status = await client.health();
+    const sample = await client.search({
+      query: 'vinyl plaat',
+      categoryId: settings.marktplaatsCategoryId,
+      postcode: settings.marktplaatsPostcode,
+      distance: settings.marktplaatsDistance,
+      limit: 1,
+    });
+    return { ok: true, ...status, sampleItems: sample.items.length, total: sample.total };
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error), status: error && error.status || null };
+  }
+}
+
 async function runAllMarketplaceScans(win) {
   if (allScanRunning) throw new Error('An all-marketplaces scan is already running.');
   allScanRunning = true;
@@ -1899,9 +2005,11 @@ async function runAllMarketplaceScans(win) {
     const vinted = getVintedService();
     const ebay = getEbayService();
     const tradera = getTraderaService();
+    const marktplaats = getMarktplaatsService();
     const vintedSnapshot = vinted.snapshot();
     const ebaySnapshot = ebay.snapshot();
     const traderaSnapshot = tradera.snapshot();
+    const marktplaatsSnapshot = marktplaats.snapshot();
     const runner = (run, skipReason = null) => skipReason ? { skipReason } : { run };
     const runService = async (run) => {
       const result = await run();
@@ -1933,6 +2041,11 @@ async function runAllMarketplaceScans(win) {
           () => runService(() => tradera.runOnce({ all: true })),
           !(traderaSnapshot.status && traderaSnapshot.status.configured) ? 'Tradera API credentials are not configured'
             : (traderaSnapshot.status.running ? 'Tradera is already scanning' : null),
+        ),
+        marktplaats: runner(
+          () => runService(() => marktplaats.runOnce({ all: true })),
+          !(marktplaatsSnapshot.status && marktplaatsSnapshot.status.configured) ? 'Marktplaats API credentials are not configured'
+            : (marktplaatsSnapshot.status.running ? 'Marktplaats is already scanning' : null),
         ),
       },
       onUpdate: send,
@@ -1996,6 +2109,17 @@ ipcMain.handle('tradera:snapshot', () => getTraderaService().snapshot());
 ipcMain.handle('tradera:setEnabled', (_e, enabled) => getTraderaService().setEnabled(!!enabled));
 ipcMain.handle('tradera:configure', (_e, options) => getTraderaService().configure(options || {}));
 ipcMain.handle('tradera:scanNow', () => getTraderaService().runOnce({ all: true }));
+ipcMain.handle('marktplaats:credentialsStatus', () => marktplaatsCredentialStatus());
+ipcMain.handle('marktplaats:saveCredentials', (_e, credentials) => {
+  const result = writeMarktplaatsCredentials(credentials || {});
+  if (marktplaatsService) marktplaatsService.resetClient();
+  return result;
+});
+ipcMain.handle('marktplaats:test', () => testMarktplaatsConnection());
+ipcMain.handle('marktplaats:snapshot', () => getMarktplaatsService().snapshot());
+ipcMain.handle('marktplaats:setEnabled', (_e, enabled) => getMarktplaatsService().setEnabled(!!enabled));
+ipcMain.handle('marktplaats:configure', (_e, options) => getMarktplaatsService().configure(options || {}));
+ipcMain.handle('marktplaats:scanNow', () => getMarktplaatsService().runOnce({ all: true }));
 ipcMain.handle('scout:run', (e, opts) => runScout(BrowserWindow.fromWebContents(e.sender), opts || {}));
 ipcMain.handle('scout:cancel', () => { scoutAbort = true; return true; });
 ipcMain.handle('scout:last', () => lastScout());
@@ -2386,6 +2510,7 @@ function createWindow() {
     getVintedService().start();
     getEbayService().start();
     getTraderaService().start();
+    getMarktplaatsService().start();
   });
 }
 
@@ -2412,6 +2537,7 @@ if (!app.requestSingleInstanceLock()) {
     if (vintedService) vintedService.stop();
     if (ebayService) ebayService.stop();
     if (traderaService) traderaService.stop();
+    if (marktplaatsService) marktplaatsService.stop();
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

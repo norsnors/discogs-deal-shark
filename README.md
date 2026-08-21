@@ -20,7 +20,8 @@
 
 Discogs Deal Shark is a desktop companion for record collectors. It combines your Discogs
 wantlist, current marketplace listings, shipping, condition and sold-price references into a small
-daily review queue. Buying always stays on Discogs and always remains manual.
+daily review queue. Optional official eBay, Tradera and Marktplaats adapters add pressing-matched
+local searches. Buying always stays on the original marketplace and always remains manual.
 
 ## Four ways to find records
 
@@ -76,6 +77,8 @@ requests. Results and sold medians are cached locally so later scans can reuse r
 
 - Your Discogs token is stored locally and is never exposed to the dashboard page.
 - Marketplace requests and secrets stay in Electron's isolated main process.
+- Marktplaats search uses its official OAuth2 API and requires credentials assigned by Marktplaats;
+  Deal Shark does not scrape Marktplaats pages.
 - The app never adds a record to a cart and never completes a purchase.
 - Scout changes your wantlist only after an explicit **Add to wantlist** click.
 - City Dig never loads store listings until you explicitly press **Load first 100 from every store**.

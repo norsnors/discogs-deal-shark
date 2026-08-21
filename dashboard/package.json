@@ -32,6 +32,7 @@
       "vinted/**/*",
       "ebay/**/*",
       "tradera/**/*",
+      "marktplaats/**/*",
       "node_modules/leaflet/dist/**/*",
       "preload.js",
       "renderer.js",
