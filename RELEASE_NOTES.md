@@ -1,5 +1,19 @@
 # Unreleased
 
+- **Stricter 7-inch/12-inch Vinted matching:** accepted title matches are now checked against the
+  item description before an alert. Hyphenated, typographic-quote, HTML-escaped, metric and common
+  European-language size spellings are recognized, and a listing containing a size absent from the
+  exact Discogs release is rejected. If Discogs knows the size but Vinted states only `45 RPM`, the
+  listing now requires an exact catalogue number or Discogs release link; label and year alone no
+  longer let a 7-inch inherit a 12-inch value. Existing observations are replayed to remove stale
+  wrong-format cards.
+- **Good Vinted prices now alert:** the existing 50%-under-sold-median Shark rule remains, while
+  pressing-verified listings in Vinted `Heel goed` (or better) also qualify when their landed total
+  is at least 15% below Discogs's matching condition value. Vinted condition stays clearly marked
+  as a seller-stated proxy, never confirmed play-grading. Existing Vinted observations are replayed
+  once so newly eligible listings can notify after upgrading. Each condition-value alert also shows
+  an indicative Discogs resale margin after the 9% seller fee, explicitly before packing and grading
+  risk; that estimate is context, never an automatic-buy instruction.
 - **City Dig Antwerp pilot:** interactive, zoomable world and street maps plus a nine-store
   directory, powered by locally bundled Leaflet and OpenStreetMap tiles at no API cost.
 - **Passive first step:** opening City Dig checks only inventory totals for verified sellers.

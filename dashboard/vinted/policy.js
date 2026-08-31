@@ -5,6 +5,30 @@
 
 const DEFAULT_CATEGORY_ID = 3041;
 const DEFAULT_MIN_DISCOUNT = 0.5;
+const DEFAULT_GOOD_PRICE_DISCOUNT = 0.15;
+const DEFAULT_DISCOGS_SELLER_FEE_RATE = 0.09;
+
+const CONDITION_GRADE_KEYS = Object.freeze({
+  'Mint (M)': 'Mint (M)',
+  'Near Mint (NM or M-)': 'Near Mint (NM or M-)',
+  'Very Good Plus (VG+)': 'Very Good Plus (VG+)',
+  'Very Good (VG)': 'Very Good (VG)',
+  'Good Plus (G+)': 'Good Plus (G+)',
+  'Good (G)': 'Good (G)',
+  'Fair (F)': 'Fair (F)',
+  'Poor (P)': 'Poor (P)',
+});
+
+const CONDITION_RANK = Object.freeze({
+  'Mint (M)': 0,
+  'Near Mint (NM or M-)': 1,
+  'Very Good Plus (VG+)': 2,
+  'Very Good (VG)': 3,
+  'Good Plus (G+)': 4,
+  'Good (G)': 5,
+  'Fair (F)': 6,
+  'Poor (P)': 7,
+});
 
 function finiteNumber(value) {
   const number = Number(value);
@@ -41,6 +65,93 @@ function normalizeText(value) {
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function canonicalExplicitGrade(value) {
+  const key = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (key === 'M') return 'Mint (M)';
+  if (key === 'NM' || key === 'M-') return 'Near Mint (NM or M-)';
+  if (key === 'VG+') return 'Very Good Plus (VG+)';
+  if (key === 'VG') return 'Very Good (VG)';
+  if (key === 'G+') return 'Good Plus (G+)';
+  if (key === 'G') return 'Good (G)';
+  if (key === 'F') return 'Fair (F)';
+  if (key === 'P') return 'Poor (P)';
+  return null;
+}
+
+// Vinted exposes one generic whole-item condition, while Discogs grades media and sleeve
+// separately. Treat the Vinted label as a useful pricing proxy, never as confirmed play-grading.
+// An explicit "vinyl: VG+"-style statement in the description is stronger and wins.
+function vintedConditionProfile(itemOrStatus, details = {}) {
+  const item = itemOrStatus && typeof itemOrStatus === 'object' ? itemOrStatus : { status: itemOrStatus };
+  const status = item.status == null ? '' : String(item.status);
+  const detailText = [details.description, details.name].filter(Boolean).join(' ');
+  const explicit = detailText.match(/\b(?:vinyl|record|disc|disco|plaat|media)\s*(?:condition|conditie|staat|stato)?\s*[:=\-]?\s*(NM|M-|VG\+|VG|G\+|G|F|P)\b/i);
+  const explicitGrade = explicit ? canonicalExplicitGrade(explicit[1]) : null;
+  if (explicitGrade) {
+    return {
+      grade: explicitGrade,
+      rank: CONDITION_RANK[explicitGrade],
+      eligible: CONDITION_RANK[explicitGrade] <= CONDITION_RANK['Very Good Plus (VG+)'],
+      source: 'seller-description',
+      label: explicit[1].toUpperCase(),
+      confirmed: false,
+    };
+  }
+
+  const normalized = normalizeText(status);
+  let grade = null;
+  // "New" is kept at NM: Vinted's general-purpose label cannot prove a truly perfect Mint record.
+  if (['nieuw met prijskaartje', 'nieuw zonder prijskaartje', 'new with tags', 'new without tags', 'new', 'like new'].includes(normalized)) grade = 'Near Mint (NM or M-)';
+  else if (['heel goed', 'very good'].includes(normalized)) grade = 'Very Good Plus (VG+)';
+  else if (['goed', 'good'].includes(normalized)) grade = 'Very Good (VG)';
+  else if (['veelgebruikt', 'satisfactory'].includes(normalized)) grade = 'Good Plus (G+)';
+  if (!grade) return null;
+  return {
+    grade,
+    rank: CONDITION_RANK[grade],
+    eligible: CONDITION_RANK[grade] <= CONDITION_RANK['Very Good Plus (VG+)'],
+    source: 'vinted-status',
+    label: status,
+    confirmed: false,
+  };
+}
+
+function conditionSuggestionReference(suggestion, condition) {
+  if (!suggestion || !condition || !condition.grade) return null;
+  const key = CONDITION_GRADE_KEYS[condition.grade];
+  const ladder = suggestion.ladder && typeof suggestion.ladder === 'object' ? suggestion.ladder : suggestion;
+  let value = finiteNumber(ladder && ladder[key]);
+  if (value == null && ladder && ladder[key] && typeof ladder[key] === 'object') value = finiteNumber(ladder[key].value);
+  if (value == null && condition.grade === 'Very Good Plus (VG+)') value = finiteNumber(suggestion.vgplus);
+  if (value == null && condition.grade === 'Very Good (VG)') value = finiteNumber(suggestion.vg);
+  return value > 0 ? value : null;
+}
+
+// Conservative flip estimate: treat the condition-matched Discogs value as the gross item sale
+// price and deduct Discogs's seller fee. Buyer-paid outbound shipping, packaging, taxes and any
+// grading dispute remain outside the estimate and are called out in the UI.
+function estimateDiscogsResale(salePrice, acquisitionTotal, options = {}) {
+  const gross = finiteNumber(salePrice);
+  const cost = finiteNumber(acquisitionTotal);
+  const configuredRate = finiteNumber(options.feeRate);
+  const feeRate = configuredRate != null && configuredRate >= 0 && configuredRate < 1
+    ? configuredRate
+    : DEFAULT_DISCOGS_SELLER_FEE_RATE;
+  if (!(gross > 0) || !(cost >= 0)) return null;
+  const fee = gross * feeRate;
+  const net = gross - fee;
+  const margin = net - cost;
+  return {
+    gross,
+    feeRate,
+    fee,
+    net,
+    margin,
+    roi: cost > 0 ? margin / cost : null,
+    profitable: margin > 0,
+  };
 }
 
 const NOISE_TOKENS = new Set([
@@ -115,6 +226,12 @@ function normalizeCatalogItem(raw = {}) {
   const seller = raw.user || raw.seller || {};
   const createdAt = raw.created_at_ts || raw.created_at || raw.createdAt || null;
   const itemId = id == null ? null : String(id);
+  const sizeValue = raw.size_title || raw.sizeTitle || raw.item_size || raw.size;
+  const formatValue = raw.format_title || raw.formatTitle || raw.format;
+  const categoryValue = raw.category_title || raw.categoryTitle || raw.category;
+  const scalarLabel = (value) => typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : (value && typeof value === 'object' ? String(value.title || value.name || value.value || '') : '');
   const safeFallback = itemId && /^\d+$/.test(itemId) ? `https://www.vinted.nl/items/${itemId}` : null;
   const candidateUrl = raw.url || raw.item_url || safeFallback;
   const url = candidateUrl ? (() => {
@@ -142,6 +259,10 @@ function normalizeCatalogItem(raw = {}) {
     updatedAt: raw.updated_at_ts || raw.updated_at || raw.updatedAt || null,
     status: raw.status || raw.status_id || null,
     catalogId: raw.catalog_id ?? raw.catalogId ?? DEFAULT_CATEGORY_ID,
+    description: scalarLabel(raw.description || raw.item_description),
+    sizeTitle: scalarLabel(sizeValue),
+    formatTitle: scalarLabel(formatValue),
+    categoryTitle: scalarLabel(categoryValue),
     rawTitle,
   };
 }
@@ -224,9 +345,21 @@ function includesCatalogNumber(normalizedText, value) {
 }
 
 function extractVinylSizes(value) {
-  const text = String(value || '').toLowerCase();
+  const text = String(value || '').toLowerCase()
+    .replace(/&(?:quot|ldquo|rdquo|prime);|&#(?:34|8220|8221|8243);|&#x(?:22|201c|201d|2033);/g, '"')
+    .replace(/&apos;|&#39;|&#x27;/g, "'");
   const sizes = new Set();
-  for (const match of text.matchAll(/(?:^|[^0-9])(7|10|12)\s*(?:["”″]|'{2}|inch(?:es)?\b)/g)) sizes.add(Number(match[1]));
+  // Sellers use many spellings and languages. Keep this limited to explicit dimensions: RPM,
+  // "single", "maxi" and "LP" are not reliable physical-size evidence on their own.
+  const inchUnit = '(?:["“”″]|[\'’]{2}|-?\\s*(?:in(?:ch(?:es)?)?\\.?|pouces?|pollici|pulgadas?|zoll|cali|polegadas?))';
+  for (const match of text.matchAll(new RegExp(`(?:^|[^0-9])(7|10|12)\\s*${inchUnit}(?=$|[^a-z0-9])`, 'g'))) sizes.add(Number(match[1]));
+  // Metric sleeve/record dimensions commonly used by continental-European sellers.
+  for (const match of text.matchAll(/(?:^|[^0-9])(17(?:[.,]5)?|18|25|30)\s*-?\s*cm\b/g)) {
+    const cm = Number(match[1].replace(',', '.'));
+    if (cm >= 17 && cm <= 18) sizes.add(7);
+    else if (cm === 25) sizes.add(10);
+    else if (cm === 30) sizes.add(12);
+  }
   return Array.from(sizes).sort((a, b) => a - b);
 }
 
@@ -240,7 +373,10 @@ function hasPrimaryReleaseAnchor(rawTitle, target) {
 
 function extractPressingSignals(item, detail = {}) {
   const listing = normalizeCatalogItem(item);
-  const text = [listing.rawTitle, listing.title, detail.name, detail.description, detail.brand, detail.color, detail.category].filter(Boolean).join(' ');
+  const text = [
+    listing.rawTitle, listing.title, listing.description, listing.sizeTitle, listing.formatTitle, listing.categoryTitle,
+    detail.name, detail.description, detail.brand, detail.color, detail.category,
+  ].filter(Boolean).join(' ');
   const normalized = normalizeText(text);
   const years = [...new Set(Array.from(String(text).matchAll(/\b(19\d{2}|20\d{2})\b/g), (match) => Number(match[1])))];
   const discogsReleaseIds = [...new Set(Array.from(
@@ -263,7 +399,11 @@ function extractPressingSignals(item, detail = {}) {
 
 function releasePressingProfile(pressing, metadata = {}) {
   const descriptions = (Array.isArray(metadata.formats) ? metadata.formats : [])
-    .flatMap((format) => Array.isArray(format.descriptions) ? format.descriptions : [])
+    .flatMap((format) => [
+      ...(Array.isArray(format.descriptions) ? format.descriptions : []),
+      format && format.text,
+    ])
+    .filter(Boolean)
     .map(String);
   const labels = (Array.isArray(metadata.labels) ? metadata.labels : []).map((label) => ({
     name: String(label && label.name || ''),
@@ -271,7 +411,7 @@ function releasePressingProfile(pressing, metadata = {}) {
   }));
   const descriptionText = descriptions.join(' ');
   const formatText = (Array.isArray(metadata.formats) ? metadata.formats : [])
-    .flatMap((format) => [format && format.name, ...(Array.isArray(format && format.descriptions) ? format.descriptions : [])])
+    .flatMap((format) => [format && format.name, ...(Array.isArray(format && format.descriptions) ? format.descriptions : []), format && format.text])
     .filter(Boolean)
     .join(' ');
   return {
@@ -300,8 +440,10 @@ function resolvePressingMatch(item, match, detail = {}, metadataById = {}, optio
     const conflicts = [];
     let score = 0;
     let catalogMatch = false;
+    let discogsReleaseMatch = false;
     if (signals.discogsReleaseIds.length) {
       if (signals.discogsReleaseIds.includes(String(profile.releaseId))) {
+        discogsReleaseMatch = true;
         score += 12;
         evidence.push(`discogs-release-${profile.releaseId}`);
       } else {
@@ -324,10 +466,13 @@ function resolvePressingMatch(item, match, detail = {}, metadataById = {}, optio
     }
     if (signals.sizes.length && profile.sizes.length) {
       const sizeMatch = signals.sizes.some((size) => profile.sizes.includes(size));
+      const sizeConflict = signals.sizes.some((size) => !profile.sizes.includes(size));
       // Size is excellent contradiction/disambiguation evidence, but not enough by itself to
-      // identify one pressing among multiple 12-inch or 7-inch editions.
-      if (sizeMatch) { score += 1; evidence.push(`size-${signals.sizes.find((size) => profile.sizes.includes(size))}-inch`); }
-      else conflicts.push('format-size-conflict');
+      // identify one pressing among multiple 12-inch or 7-inch editions. If the seller mentions
+      // both 7 and 12 while the Discogs release has only one, fail closed instead of accepting the
+      // one overlapping size.
+      if (sizeConflict || !sizeMatch) conflicts.push('format-size-conflict');
+      else { score += 1; evidence.push(`size-${signals.sizes.find((size) => profile.sizes.includes(size))}-inch`); }
     }
     if (signals.compilation) {
       if (profile.isCompilation) evidence.push('compilation');
@@ -337,6 +482,13 @@ function resolvePressingMatch(item, match, detail = {}, metadataById = {}, optio
       if (includesCatalogNumber(signals.normalized, label.catno)) { catalogMatch = true; score += 8; evidence.push(`catno-${label.catno}`); }
       const labelName = normalizeText(label.name);
       if (labelName.length >= 5 && signals.normalized.includes(labelName)) { score += 3; evidence.push(`label-${label.name}`); }
+    }
+    // Label + year identifies a recording, not necessarily its physical edition. If Discogs knows
+    // this pressing is 7/10/12-inch but Vinted states no size, require an exact release URL or
+    // catalogue number. This blocks same-year, same-label 7-inch/12-inch pairs such as Clad's
+    // Song Of Arabia (wanted DM 9330 12-inch vs Vinted P 7370 7-inch).
+    if (profile.sizes.length && !signals.sizes.length && !catalogMatch && !discogsReleaseMatch) {
+      conflicts.push('format-size-unverified');
     }
     // Track names and artists are often listed after the actual compilation/album title. Do not
     // treat those as the item being sold. An exact catalogue number remains a safe override for
@@ -461,7 +613,7 @@ function evaluateListing(item, match, options = {}) {
     shippingEstimate,
     total,
     reference: reference > 0 ? reference : null,
-    referenceSource: reference > 0 ? 'sold-median' : null,
+    referenceSource: reference > 0 ? (options.referenceSource || 'sold-median') : null,
     threshold,
     discount,
     savings: reference > 0 && total != null ? Math.max(0, reference - total) : null,
@@ -491,12 +643,17 @@ function availabilityStatus(itemOrItems) {
 module.exports = {
   DEFAULT_CATEGORY_ID,
   DEFAULT_MIN_DISCOUNT,
+  DEFAULT_GOOD_PRICE_DISCOUNT,
+  DEFAULT_DISCOGS_SELLER_FEE_RATE,
   parseMoney,
   normalizeText,
   meaningfulTokens,
   splitArtistTitle,
   normalizeWant,
   normalizeCatalogItem,
+  vintedConditionProfile,
+  conditionSuggestionReference,
+  estimateDiscogsResale,
   buildWantIndex,
   matchCatalogItem,
   evaluateListing,
@@ -538,8 +695,76 @@ if (require.main === module && process.argv.includes('--selftest')) {
   assert.strictEqual(exactOriginal.reference, 440);
   const wrongSize = resolvePressingMatch({ id: 911, title: '7 inch Air Mail - Flash In Your Mind - original pressing LMB 025' }, airMailMatch, {}, originalMeta);
   assert.deepStrictEqual({ accepted: wrongSize.accepted, reason: wrongSize.reason }, { accepted: false, reason: 'format-size-conflict' }, 'a 7-inch listing cannot inherit the median of a wanted 12-inch release');
+  for (const [label, itemValue, details] of [
+    ['hyphenated', { id: 9111, title: 'Air Mail - Flash In Your Mind - LMB 025', size_title: '7-inch' }, {}],
+    ['curly quotes', { id: 9112, title: 'Air Mail - Flash In Your Mind - LMB 025' }, { description: 'Formato vinile 7’’' }],
+    ['metric', { id: 9113, title: 'Air Mail - Flash In Your Mind - LMB 025' }, { description: 'Singolo diametro 17 cm' }],
+    ['Italian', { id: 9114, title: 'Air Mail - Flash In Your Mind - LMB 025' }, { description: 'Disco 7 pollici' }],
+    ['French', { id: 9115, title: 'Air Mail - Flash In Your Mind - LMB 025' }, { description: 'Vinyle 7 pouces' }],
+    ['HTML quote', { id: 9116, title: 'Air Mail - Flash In Your Mind - LMB 025' }, { description: 'Vinyl 7&quot;' }],
+  ]) {
+    const variantDecision = resolvePressingMatch(itemValue, airMailMatch, details, originalMeta);
+    assert.deepStrictEqual(
+      { accepted: variantDecision.accepted, reason: variantDecision.reason },
+      { accepted: false, reason: 'format-size-conflict' },
+      `${label} 7-inch notation cannot inherit a wanted 12-inch release`,
+    );
+  }
   const rightSize = resolvePressingMatch({ id: 912, title: '12 inch Air Mail - Flash In Your Mind - LMB 025' }, airMailMatch, {}, originalMeta);
   assert.strictEqual(rightSize.accepted, true, 'matching 12-inch size and catalogue number identify the wanted release');
+  const sizeFromDiscogsFreeText = resolvePressingMatch(
+    { id: 9120, title: '7-inch Air Mail - Flash In Your Mind - LMB 025' },
+    airMailMatch,
+    {},
+    { 10: { year: 1987, formats: [{ name: 'Vinyl', descriptions: ['Single'], text: '12-inch' }], labels: [{ name: 'Lombardoni Publishings', catno: 'LMB 025' }] } },
+  );
+  assert.deepStrictEqual(
+    { accepted: sizeFromDiscogsFreeText.accepted, reason: sizeFromDiscogsFreeText.reason },
+    { accepted: false, reason: 'format-size-conflict' },
+    'Discogs format free text also contributes the authoritative release size',
+  );
+  const mixedSizes = resolvePressingMatch(
+    { id: 9121, title: 'Air Mail - Flash In Your Mind - LMB 025' },
+    airMailMatch,
+    { description: 'Vinyl 12 inch / 7 inch' },
+    originalMeta,
+  );
+  assert.deepStrictEqual(
+    { accepted: mixedSizes.accepted, reason: mixedSizes.reason },
+    { accepted: false, reason: 'format-size-conflict' },
+    'a listing mentioning both 7-inch and 12-inch cannot pass through one overlapping size',
+  );
+  const cladIndex = buildWantIndex(
+    [{ releaseId: 1733869, artist: 'Clad', title: 'Song Of Arabia', year: 1986 }],
+    { 1733869: { median: 80 } },
+  );
+  const cladListing = {
+    id: 6403537519,
+    title: 'CLAD Song of Arabia vinyl 45 Italo Disco RARE',
+    price: { amount: '25', currency_code: 'EUR' },
+    status: 'Heel goed',
+  };
+  const cladMatch = matchCatalogItem(cladListing, cladIndex);
+  const cladWrongFormat = resolvePressingMatch(
+    cladListing,
+    cladMatch,
+    { description: 'CLAD Song of Arabia Panarecord 1986 vinile 45 giri Italo Disco MOLTO RARO' },
+    {
+      1733869: {
+        id: 1733869,
+        title: 'Song Of Arabia',
+        year: 1986,
+        country: 'Italy',
+        formats: [{ name: 'Vinyl', descriptions: ['12"', '45 RPM', 'Stereo'] }],
+        labels: [{ name: 'Panarecord', catno: 'DM 9330' }],
+      },
+    },
+  );
+  assert.deepStrictEqual(
+    { accepted: cladWrongFormat.accepted, reason: cladWrongFormat.reason },
+    { accepted: false, reason: 'format-size-unverified' },
+    'Vinted 6403537519 cannot inherit the wanted Clad 12-inch value from title, label, year and 45 RPM alone',
+  );
   const explicitDiscogsMatch = resolvePressingMatch(
     { id: 9121, title: 'Air Mail - Flash In Your Mind' },
     airMailMatch,
@@ -599,9 +824,9 @@ if (require.main === module && process.argv.includes('--selftest')) {
     { releaseId: 10, artist: 'Air Mail', title: 'Flash In Your Mind', year: 1987 },
     { releaseId: 20, artist: 'Air Mail', title: 'Flash In Your Mind', year: 2025 },
   ], { 10: { median: 440 }, 20: { median: 25 } });
-  const bothMatch = matchCatalogItem({ id: 95, title: 'Air Mail - Flash In Your Mind - 2025 Reissue' }, bothVersions);
+  const bothMatch = matchCatalogItem({ id: 95, title: '12 inch Air Mail - Flash In Your Mind - 2025 Reissue' }, bothVersions);
   const selectedReissue = resolvePressingMatch(
-    { id: 95, title: 'Air Mail - Flash In Your Mind - 2025 Reissue' },
+    { id: 95, title: '12 inch Air Mail - Flash In Your Mind - 2025 Reissue' },
     bothMatch,
     {},
     {
@@ -613,9 +838,9 @@ if (require.main === module && process.argv.includes('--selftest')) {
   assert.strictEqual(selectedReissue.target.releaseId, 20, 'the reissue never inherits the original release id');
   assert.strictEqual(selectedReissue.reference, 25, 'the reissue is valued against its own sold median');
   const unknownVersion = resolvePressingMatch({ id: 92, title: 'Air Mail - Flash In Your Mind' }, airMailMatch, {}, originalMeta);
-  assert.deepStrictEqual({ accepted: unknownVersion.accepted, reason: unknownVersion.reason }, { accepted: false, reason: 'version-unverified' });
+  assert.deepStrictEqual({ accepted: unknownVersion.accepted, reason: unknownVersion.reason }, { accepted: false, reason: 'format-size-unverified' }, 'a size-less listing cannot inherit a size-specific pressing');
   const labelOnly = resolvePressingMatch({ id: 93, title: 'Air Mail - Flash In Your Mind - Lombardoni Publishings' }, airMailMatch, {}, originalMeta);
-  assert.deepStrictEqual({ accepted: labelOnly.accepted, reason: labelOnly.reason }, { accepted: false, reason: 'version-unverified' }, 'a broad label name cannot identify a pressing by itself');
+  assert.deepStrictEqual({ accepted: labelOnly.accepted, reason: labelOnly.reason }, { accepted: false, reason: 'format-size-unverified' }, 'a broad label name cannot identify the size-specific pressing by itself');
   const metadataUnavailable = resolvePressingMatch({ id: 94, title: 'Air Mail - Flash In Your Mind - LMB 025' }, airMailMatch, {}, {});
   assert.strictEqual(metadataUnavailable.reason, 'metadata-unavailable', 'missing Discogs metadata is distinct from an ambiguous listing');
   assert.strictEqual(includesCatalogNumber('air mail abc 123', 'ABC 12'), false, 'catalogue numbers do not prefix-match longer numbers');
@@ -637,6 +862,36 @@ if (require.main === module && process.argv.includes('--selftest')) {
   assert.deepStrictEqual({ accepted: ambiguousDecision.accepted, reason: ambiguousDecision.reason }, { accepted: false, reason: 'pressing-ambiguous' }, 'equal evidence across pressings is rejected instead of picking a median');
   const deal = evaluateListing(item, match, { minDiscount: 0.5, shippingEstimate: 5 });
   assert.ok(deal.isDeal && deal.total === 27, 'price plus fee and shipping is compared with the median');
+  const elvinCondition = vintedConditionProfile(
+    { status: 'Heel goed' },
+    { description: 'Disco e cover in ottimo stato. https://www.discogs.com/release/122472' },
+  );
+  assert.deepStrictEqual(
+    { grade: elvinCondition.grade, eligible: elvinCondition.eligible, source: elvinCondition.source },
+    { grade: 'Very Good Plus (VG+)', eligible: true, source: 'vinted-status' },
+    'Vinted Heel goed is a VG+ pricing proxy, but not confirmed play-grading',
+  );
+  const elvinReference = conditionSuggestionReference({ ladder: { 'Very Good Plus (VG+)': 52.325 } }, elvinCondition);
+  const elvinDeal = evaluateListing(
+    { id: 6199330482, title: 'Disco 12" Elvin - Luggi, Luggi, Ludwig', price: 35, total_item_price: 37.45, status: 'Heel goed' },
+    { target: { releaseId: 122472, median: 46.24 } },
+    { minDiscount: DEFAULT_GOOD_PRICE_DISCOUNT, shippingEstimate: 5, reference: elvinReference, referenceSource: 'condition-suggestion' },
+  );
+  assert.ok(elvinDeal.isDeal && elvinDeal.total === 42.45, 'the concrete Elvin listing qualifies as a good Vinted price including estimated shipping');
+  assert.strictEqual(elvinDeal.referenceSource, 'condition-suggestion');
+  const elvinResale = estimateDiscogsResale(elvinReference, elvinDeal.total);
+  assert.deepStrictEqual(
+    {
+      fee: Number(elvinResale.fee.toFixed(2)),
+      net: Number(elvinResale.net.toFixed(2)),
+      margin: Number(elvinResale.margin.toFixed(2)),
+      roi: Number(elvinResale.roi.toFixed(3)),
+    },
+    { fee: 4.71, net: 47.62, margin: 5.17, roi: 0.122 },
+    'resale estimate deducts the Discogs seller fee from the condition-matched value',
+  );
+  const explicitVg = vintedConditionProfile('Heel goed', { description: 'Vinyl: VG / Hoes: VG+' });
+  assert.deepStrictEqual({ grade: explicitVg.grade, eligible: explicitVg.eligible, source: explicitVg.source }, { grade: 'Very Good (VG)', eligible: false, source: 'seller-description' }, 'an explicit media grade overrides the broad Vinted status');
   assert.deepStrictEqual(rareGemTransition({ status: 'zero' }, { status: 'available' }).isRareGem, true);
   assert.strictEqual(rareGemTransition({ status: 'available' }, { status: 'available' }).isRareGem, false);
   console.log('vinted/policy selftest: all assertions passed');
