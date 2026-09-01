@@ -5,7 +5,8 @@
   catalogue/format evidence where Discogs has it and a strict asking-price ceiling after the shipping
   estimate. The user inspects the results and saves the search on Marktplaats; Deal Shark does not
   scrape pages, read cookies or claim unverified results as deals. The official API scanner remains
-  available unchanged when partner credentials are configured.
+  available unchanged when partner credentials are configured. `Scan all` now prepares the native
+  hunts when those credentials are absent instead of reporting that partner access is needed.
 - **Stricter 7-inch/12-inch Vinted matching:** accepted title matches are now checked against the
   item description before an alert. Hyphenated, typographic-quote, HTML-escaped, metric and common
   European-language size spellings are recognized, and a listing containing a size absent from the

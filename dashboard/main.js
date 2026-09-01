@@ -33,7 +33,7 @@ const { createTraderaClient } = require('./tradera/client');
 const { createTraderaService } = require('./tradera/service');
 const { createMarktplaatsClient } = require('./marktplaats/client');
 const { createMarktplaatsService } = require('./marktplaats/service');
-const { runAllScans } = require('./all-scan');
+const { runAllScans, planMarktplaatsAllScan } = require('./all-scan');
 
 // Preserve settings for users upgrading from Deal Watcher. Electron derives a new user-data folder
 // from productName; switching blindly would make an upgraded app look like a clean install. Fresh
@@ -2038,6 +2038,7 @@ async function runAllMarketplaceScans(win) {
     const ebaySnapshot = ebay.snapshot();
     const traderaSnapshot = tradera.snapshot();
     const marktplaatsSnapshot = marktplaats.snapshot();
+    const marktplaatsPlan = planMarktplaatsAllScan(marktplaatsSnapshot.status, !!config.username && !!config.token);
     const runner = (run, skipReason = null) => skipReason ? { skipReason } : { run };
     const runService = async (run) => {
       const result = await run();
@@ -2071,9 +2072,8 @@ async function runAllMarketplaceScans(win) {
             : (traderaSnapshot.status.running ? 'Tradera is already scanning' : null),
         ),
         marktplaats: runner(
-          () => runService(() => marktplaats.runOnce({ all: true })),
-          !(marktplaatsSnapshot.status && marktplaatsSnapshot.status.configured) ? 'Marktplaats API credentials are not configured'
-            : (marktplaatsSnapshot.status.running ? 'Marktplaats is already scanning' : null),
+          () => runService(() => marktplaatsPlan.mode === 'native' ? marktplaats.prepareNativeHunts() : marktplaats.runOnce({ all: true })),
+          marktplaatsPlan.skipReason,
         ),
       },
       onUpdate: send,

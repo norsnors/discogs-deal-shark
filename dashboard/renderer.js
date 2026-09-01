@@ -2200,7 +2200,7 @@ async function startAllScans() {
   resetAllScanSources();
   setScanUI(true);
   $('btn-scan-cancel').textContent = 'Stop Discogs';
-  $('btn-scan-cancel').title = 'Stops the Discogs scan; marketplace API checks finish independently';
+  $('btn-scan-cancel').title = 'Stops the Discogs scan; marketplace checks finish independently';
   renderAllScanStatus('Starting every available marketplace…');
   let finalText = '';
   try {

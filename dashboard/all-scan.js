@@ -4,6 +4,13 @@ const assert = require('assert');
 
 const ALL_SCAN_SOURCES = Object.freeze(['discogs', 'vinted', 'ebay', 'tradera', 'marktplaats']);
 
+function planMarktplaatsAllScan(status = {}, discogsConfigured = true) {
+  if (!discogsConfigured) return { mode: 'skip', skipReason: 'Discogs account is not configured' };
+  if (!status.configured) return { mode: 'native', skipReason: null };
+  if (status.running) return { mode: 'skip', skipReason: 'Marktplaats is already scanning' };
+  return { mode: 'api', skipReason: null };
+}
+
 function publicStates(states) {
   return Object.fromEntries(ALL_SCAN_SOURCES.map((source) => [source, { ...states[source] }]));
 }
@@ -51,7 +58,7 @@ async function runAllScans({ runners = {}, onUpdate = () => {}, now = Date.now }
   return outcome;
 }
 
-module.exports = { ALL_SCAN_SOURCES, runAllScans };
+module.exports = { ALL_SCAN_SOURCES, runAllScans, planMarktplaatsAllScan };
 
 if (require.main === module && process.argv.includes('--selftest')) {
   (async () => {
@@ -82,6 +89,10 @@ if (require.main === module && process.argv.includes('--selftest')) {
     assert.deepStrictEqual(result.failures, ['ebay']);
     assert.ok(updates.some((update) => update.sources.discogs.status === 'running'));
     assert.strictEqual(updates.at(-1).running, false);
+    assert.deepStrictEqual(planMarktplaatsAllScan({ configured: false }, true), { mode: 'native', skipReason: null });
+    assert.deepStrictEqual(planMarktplaatsAllScan({ configured: true, running: false }, true), { mode: 'api', skipReason: null });
+    assert.strictEqual(planMarktplaatsAllScan({ configured: false }, false).mode, 'skip');
+    assert.strictEqual(planMarktplaatsAllScan({ configured: true, running: true }, true).skipReason, 'Marktplaats is already scanning');
     console.log('all-scan selftest: OK');
   })().catch((error) => { console.error(error); process.exitCode = 1; });
 }
