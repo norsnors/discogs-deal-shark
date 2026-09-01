@@ -110,8 +110,9 @@ let ebayStatus = { enabled: false, configured: false, running: false, health: 's
 let ebayRefreshBusy = false;
 let traderaStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 9500, message: null, progress: null, fx: null };
 let traderaRefreshBusy = false;
-let marktplaatsStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 4000, message: null, progress: null };
+let marktplaatsStatus = { enabled: false, configured: false, mode: 'native', running: false, health: 'native', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 4000, message: null, progress: null, nativeHunts: { total: 0, eligibleTotal: 0, opened: 0, remaining: 0, complete: false, preparedAt: null, lastOpened: null } };
 let marktplaatsRefreshBusy = false;
+let marktplaatsHuntBusy = false;
 const ALL_SCAN_LABELS = { discogs: 'Discogs', vinted: 'Vinted', ebay: 'eBay', tradera: 'Tradera', marktplaats: 'Marktplaats' };
 let scanAllRunning = false;
 let scanAllSources = Object.fromEntries(Object.keys(ALL_SCAN_LABELS).map((source) => [source, { state: 'queued' }]));
@@ -294,9 +295,12 @@ function updateViewCopy() {
     $('view-title').textContent = gems ? 'Wanted records newly available on Tradera' : 'Tradera deals worth opening';
     $('view-intro').textContent = gems ? 'An official Tradera API search found no matching fixed-price pressing, then a verified copy appeared.' : 'Fixed-price Tradera listings, pressing-matched to Discogs and converted from SEK with the ECB daily rate.';
   } else if (marktplaats) {
-    $('view-eyebrow').textContent = gems ? 'MARKTPLAATS RARITY WATCH' : 'MARKTPLAATS × YOUR WANTLIST';
-    $('view-title').textContent = gems ? 'Wanted records newly available on Marktplaats' : 'Marktplaats deals worth opening';
-    $('view-intro').textContent = gems ? 'An official Marktplaats API search found no matching fixed-price ad, then a verified copy appeared.' : 'Fixed-price Marktplaats ads, pressing-matched to Discogs and ranked by asking price plus your shipping estimate.';
+    const nativeMode = !marktplaatsStatus.configured;
+    $('view-eyebrow').textContent = nativeMode ? 'MARKTPLAATS SAVED SEARCHES' : (gems ? 'MARKTPLAATS RARITY WATCH' : 'MARKTPLAATS × YOUR WANTLIST');
+    $('view-title').textContent = nativeMode ? 'Create native Marktplaats alerts' : (gems ? 'Wanted records newly available on Marktplaats' : 'Marktplaats deals worth opening');
+    $('view-intro').textContent = nativeMode
+      ? 'Open one price-capped search per exact Discogs pressing, inspect the ad, then save the search on Marktplaats for native notifications.'
+      : (gems ? 'An official Marktplaats API search found no matching fixed-price ad, then a verified copy appeared.' : 'Fixed-price Marktplaats ads, pressing-matched to Discogs and ranked by asking price plus your shipping estimate.');
   } else {
     $('view-eyebrow').textContent = city ? 'DIG THE CITY' : (scout ? 'BEYOND YOUR WANTLIST' : (gems ? 'RARITY WATCH' : 'YOUR WANTLIST'));
     $('view-title').textContent = city ? 'Antwerp record stores, one inventory at a time' : (scout ? 'Scout valuable records you may be missing' : (gems ? 'Rare records that just surfaced' : 'Deals worth opening'));
@@ -1577,10 +1581,12 @@ function normalizeMarktplaatsSnapshot(value) {
   const input = value && typeof value === 'object' ? value : {};
   const status = input.status && typeof input.status === 'object' ? input.status : {};
   const progress = status.progress && typeof status.progress === 'object' ? status.progress : null;
+  const hunts = status.nativeHunts && typeof status.nativeHunts === 'object' ? status.nativeHunts : {};
   return {
     status: {
       enabled: !!status.enabled,
       configured: !!status.configured,
+      mode: status.configured ? 'api' : 'native',
       running: !!status.running,
       health: status.health || (status.configured ? 'idle' : 'setup'),
       pollMinutes: Number(status.pollMinutes) || 30,
@@ -1591,6 +1597,15 @@ function normalizeMarktplaatsSnapshot(value) {
       targetCount: Math.max(0, Number(status.targetCount) || 0),
       progress,
       lastRunStats: status.lastRunStats && typeof status.lastRunStats === 'object' ? status.lastRunStats : null,
+      nativeHunts: {
+        preparedAt: hunts.preparedAt || null,
+        total: Math.min(100, Math.max(0, Number(hunts.total) || 0)),
+        eligibleTotal: Math.max(0, Number(hunts.eligibleTotal) || 0),
+        opened: Math.max(0, Number(hunts.opened) || 0),
+        remaining: Math.max(0, Number(hunts.remaining) || 0),
+        complete: !!hunts.complete,
+        lastOpened: hunts.lastOpened && typeof hunts.lastOpened === 'object' ? hunts.lastOpened : null,
+      },
       message: status.message || null,
       error: status.error || null,
     },
@@ -1600,21 +1615,47 @@ function normalizeMarktplaatsSnapshot(value) {
   };
 }
 
+function marktplaatsContextText() {
+  return marktplaatsStatus.configured
+    ? 'Official API v2 · fixed price only · exact pressing match'
+    : 'Native saved searches · no scraping · verify the pressing on Marktplaats';
+}
+
 function renderMarktplaatsStatus() {
   const s = marktplaatsStatus || {};
+  const nativeMode = !s.configured;
+  const hunts = s.nativeHunts || {};
+  document.querySelectorAll('.marktplaats-api-only').forEach((element) => element.classList.toggle('hidden', nativeMode));
+  document.querySelectorAll('.marktplaats-native-only').forEach((element) => element.classList.toggle('hidden', !nativeMode));
   $('marktplaats-enabled').checked = !!s.enabled;
   if ([...$('marktplaats-poll-interval').options].some((option) => Number(option.value) === Number(s.pollMinutes))) $('marktplaats-poll-interval').value = String(s.pollMinutes);
   const health = $('marktplaats-health');
-  health.className = 'vinted-health ' + (s.health === 'error' ? 'is-error' : (s.running ? 'is-scanning' : (s.health === 'live' ? 'is-live' : (s.configured ? 'is-idle' : 'is-paused'))));
-  $('marktplaats-health-label').textContent = s.health === 'error' ? 'Error' : (s.running ? 'Scanning' : (s.health === 'live' ? 'Live' : (s.configured ? (s.enabled ? 'Ready' : 'Connected') : 'Setup needed')));
-  $('marktplaats-last-scan').textContent = s.lastPollAt ? ago(s.lastPollAt) : 'Not yet';
-  $('marktplaats-next-scan').textContent = s.enabled && s.nextPollAt ? until(s.nextPollAt) : '—';
-  $('marktplaats-api-calls').textContent = `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 4000).toLocaleString()}`;
+  health.className = 'vinted-health ' + (s.health === 'error' ? 'is-error' : (s.running || marktplaatsHuntBusy ? 'is-scanning' : (s.health === 'live' || nativeMode && hunts.total ? 'is-live' : 'is-idle')));
+  $('marktplaats-health-label').textContent = s.health === 'error' ? 'Error'
+    : (s.running ? 'Scanning' : (nativeMode ? (hunts.complete ? 'Hunts complete' : (hunts.total ? 'Hunts ready' : 'Preparing hunts')) : (s.health === 'live' ? 'Live' : (s.enabled ? 'Ready' : 'Connected'))));
+  $('marktplaats-last-label').textContent = nativeMode ? 'Last opened' : 'Last scan';
+  $('marktplaats-next-label').textContent = nativeMode ? 'Progress' : 'Next scan';
+  $('marktplaats-budget-label').textContent = nativeMode ? 'Mode' : 'Local budget';
+  $('marktplaats-last-scan').textContent = nativeMode ? (hunts.lastOpened && hunts.lastOpened.openedAt ? ago(hunts.lastOpened.openedAt) : 'Not yet') : (s.lastPollAt ? ago(s.lastPollAt) : 'Not yet');
+  $('marktplaats-next-scan').textContent = nativeMode ? (hunts.total ? `${hunts.opened || 0} / ${hunts.total}` : 'Preparing…') : (s.enabled && s.nextPollAt ? until(s.nextPollAt) : '—');
+  $('marktplaats-api-calls').textContent = nativeMode ? 'Native alerts' : `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 4000).toLocaleString()}`;
   const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
   const completed = !s.running ? marketplaceScanSummary(s.lastRunStats) : '';
-  $('marktplaats-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official API v2 ready.' : 'Add API partner credentials assigned by Marktplaats.')}${completed ? ` ${completed}` : ''}`;
-  $('marktplaats-scan-now').disabled = !!s.running || !s.configured || scanAllRunning;
-  $('marktplaats-enabled').disabled = !s.configured;
+  const nativeMessage = hunts.lastOpened
+    ? `Opened ${hunts.lastOpened.artist || ''} – ${hunts.lastOpened.title || ''} up to ${money(hunts.lastOpened.priceCeiling, 'EUR')}. On Marktplaats, inspect the pressing and click “Bewaar je zoekopdracht” for native notifications.`
+    : (hunts.total
+        ? `${hunts.remaining} high-value hunt${hunts.remaining === 1 ? '' : 's'} left. Each search carries the strict asking-price ceiling; Deal Shark never treats its results as verified alerts.`
+        : (hunts.preparedAt ? 'No wantlist pressings currently meet your value and discount thresholds.' : 'Preparing high-value saved-search hunts from your Discogs wantlist…'));
+  $('marktplaats-status-message').textContent = s.error || (nativeMode ? nativeMessage : `${progress}${s.message || 'Official API v2 ready.'}${completed ? ` ${completed}` : ''}`);
+  $('marktplaats-scan-now').textContent = nativeMode ? (hunts.complete ? 'All hunts opened' : 'Open next hunt') : 'Scan Marktplaats now';
+  $('marktplaats-scan-now').disabled = nativeMode ? (marktplaatsHuntBusy || !hunts.total || hunts.complete || scanAllRunning) : (!!s.running || scanAllRunning);
+  $('marktplaats-hunt-reset').disabled = marktplaatsHuntBusy || !hunts.opened;
+  $('marktplaats-enabled').disabled = nativeMode;
+  if (activePlatform === 'marktplaats') {
+    $('platform-context-label').textContent = marktplaatsContextText();
+    $('btn-fullscan').title = nativeMode ? 'Open the next high-value Marktplaats hunt in your browser' : 'Search the official Marktplaats API for every wantlist pressing';
+    updateViewCopy();
+  }
 }
 
 function notifyMarktplaats(items, kind = 'deal') {
@@ -1639,7 +1680,11 @@ function applyMarktplaatsSnapshot(value, { notify = false } = {}) {
 async function refreshMarktplaatsSnapshot() {
   if (!hasApi || !window.api.marktplaatsSnapshot || marktplaatsRefreshBusy) return;
   marktplaatsRefreshBusy = true;
-  try { applyMarktplaatsSnapshot(await window.api.marktplaatsSnapshot()); }
+  try {
+    const first = await window.api.marktplaatsSnapshot();
+    applyMarktplaatsSnapshot(first);
+    if (!(first && first.status && first.status.configured) && window.api.marktplaatsPrepareHunts) applyMarktplaatsSnapshot(await window.api.marktplaatsPrepareHunts());
+  }
   catch (error) { marktplaatsStatus = { ...marktplaatsStatus, health: 'error', error: error && error.message ? error.message : String(error) }; renderMarktplaatsStatus(); }
   finally { marktplaatsRefreshBusy = false; }
 }
@@ -1660,14 +1705,14 @@ async function setPlatform(platform) {
   $('platform-select').value = activePlatform;
   $('platform-context-label').textContent = activePlatform === 'vinted'
     ? 'Anonymous newest-listings feed · matching and history stay on this PC'
-    : (activePlatform === 'ebay' ? 'Official Browse API · exact pressing match · landed-cost comparison' : (activePlatform === 'tradera' ? 'Official REST v4 · fixed price only · ECB currency conversion' : (activePlatform === 'marktplaats' ? 'Official API v2 · fixed price only · exact pressing match' : 'Wantlist, sold medians and connected sellers')));
+    : (activePlatform === 'ebay' ? 'Official Browse API · exact pressing match · landed-cost comparison' : (activePlatform === 'tradera' ? 'Official REST v4 · fixed price only · ECB currency conversion' : (activePlatform === 'marktplaats' ? marktplaatsContextText() : 'Wantlist, sold medians and connected sellers')));
   $('vinted-panel').classList.toggle('hidden', activePlatform !== 'vinted');
   $('ebay-panel').classList.toggle('hidden', activePlatform !== 'ebay');
   $('tradera-panel').classList.toggle('hidden', activePlatform !== 'tradera');
   $('marktplaats-panel').classList.toggle('hidden', activePlatform !== 'marktplaats');
   $('btn-fullscan').querySelector('span').textContent = `${ALL_SCAN_LABELS[activePlatform]} only`;
   $('btn-fullscan').title = activePlatform === 'vinted' ? 'Check the Vinted newest feed now'
-    : (activePlatform === 'ebay' ? 'Search the official eBay Browse API for every wantlist pressing' : (activePlatform === 'tradera' ? 'Search the official Tradera REST API for every wantlist pressing' : (activePlatform === 'marktplaats' ? 'Search the official Marktplaats API for every wantlist pressing' : 'Scan the full wantlist with real condition, shipping and fresh sold medians')));
+    : (activePlatform === 'ebay' ? 'Search the official eBay Browse API for every wantlist pressing' : (activePlatform === 'tradera' ? 'Search the official Tradera REST API for every wantlist pressing' : (activePlatform === 'marktplaats' ? (marktplaatsStatus.configured ? 'Search the official Marktplaats API for every wantlist pressing' : 'Open the next high-value Marktplaats hunt in your browser') : 'Scan the full wantlist with real condition, shipping and fresh sold medians')));
   $('vgPlusOnly').closest('.switch-row').classList.toggle('hidden', activePlatform !== 'discogs');
   $('showNearMiss').closest('.switch-row').classList.toggle('hidden', activePlatform !== 'discogs');
   updateGemsBadge();
@@ -1780,7 +1825,7 @@ function render() {
     ? `${alertDealCount} alert deal${alertDealCount === 1 ? '' : 's'}${dashboardMatchCount ? ` · ${dashboardMatchCount} dashboard` : ''}`
     : `${allDeals.length} deal${allDeals.length === 1 ? '' : 's'}`;
   const verifyNote = activePlatform === 'discogs' && verifyInfo.running ? ` · ✓ checking listings ${Math.min(verifyInfo.done + 1, verifyInfo.total)}/${verifyInfo.total}…` : '';
-  const sourceNote = activePlatform === 'vinted' ? ' · Vinted sniper' : (activePlatform === 'ebay' ? ' · eBay Browse API' : (activePlatform === 'tradera' ? ' · Tradera REST v4' : (activePlatform === 'marktplaats' ? ' · Marktplaats API v2' : (viewMode === 'scan' ? ' · live scan' : ''))));
+  const sourceNote = activePlatform === 'vinted' ? ' · Vinted sniper' : (activePlatform === 'ebay' ? ' · eBay Browse API' : (activePlatform === 'tradera' ? ' · Tradera REST v4' : (activePlatform === 'marktplaats' ? (marktplaatsStatus.configured ? ' · Marktplaats API v2' : ' · native Marktplaats hunts') : (viewMode === 'scan' ? ' · live scan' : ''))));
   const marketplaceBreakdown = officialMarketplace ? ` · ${alertDealCount} alert eligible` : '';
   $('resultCount').textContent = (deals.length || verifyNote) ? `${deals.length} shown of ${allDeals.length}${marketplaceBreakdown}${hiddenNote}${vgNote}${sourceNote}${verifyNote}` : '';
   if (!deals.length && !misses.length && !goneDeals.length) {
@@ -1801,7 +1846,7 @@ function render() {
               : (activePlatform === 'tradera'
                   ? (traderaStatus.running ? 'The official Tradera API is scanning your wantlist.' : (traderaStatus.configured ? (marketplaceScanSummary(traderaStatus.lastRunStats) || 'No safe fixed-price Tradera pressing matches yet. Run a scan or enable background watch.') : 'Configure your Tradera App ID and App Key to start.'))
                   : (activePlatform === 'marktplaats'
-                      ? (marktplaatsStatus.running ? 'The official Marktplaats API is scanning your wantlist.' : (marktplaatsStatus.configured ? (marketplaceScanSummary(marktplaatsStatus.lastRunStats) || 'No safe fixed-price Marktplaats pressing matches yet. Run a scan or enable background watch.') : 'Configure the Client ID and Client Secret assigned by Marktplaats to start.'))
+                      ? (marktplaatsStatus.running ? 'The official Marktplaats API is scanning your wantlist.' : (marktplaatsStatus.configured ? (marketplaceScanSummary(marktplaatsStatus.lastRunStats) || 'No safe fixed-price Marktplaats pressing matches yet. Run a scan or enable background watch.') : (marktplaatsStatus.nativeHunts && marktplaatsStatus.nativeHunts.total ? 'Use “Open next hunt”, inspect the pressing on Marktplaats and click “Bewaar je zoekopdracht” for native notifications.' : 'Deal Shark is preparing high-value Marktplaats hunts from your wantlist.')))
                       : (viewMode === 'scan'
           ? (scannedOnce
               ? 'Scan finished — no confirmed VG+ copies meet your discount threshold right now.'
@@ -2020,6 +2065,7 @@ async function refresh() {
   if (activePlatform === 'vinted') { await refreshVintedSnapshot(); return; }
   if (activePlatform === 'ebay') { await refreshEbaySnapshot(); return; }
   if (activePlatform === 'tradera') { await refreshTraderaSnapshot(); return; }
+  if (activePlatform === 'marktplaats') { await refreshMarktplaatsSnapshot(); return; }
   if (viewMode === 'scan') return; // don't clobber live scan results
   allNearMisses = []; // cloud deals.json carries no near-misses — they exist only in a local scan
   if (!hasApi) {
@@ -2154,7 +2200,7 @@ async function startAllScans() {
   resetAllScanSources();
   setScanUI(true);
   $('btn-scan-cancel').textContent = 'Stop Discogs';
-  $('btn-scan-cancel').title = 'Stops the Discogs scan; marketplace API checks finish independently';
+  $('btn-scan-cancel').title = 'Stops the Discogs scan; marketplace checks finish independently';
   renderAllScanStatus('Starting every available marketplace…');
   let finalText = '';
   try {
@@ -2195,6 +2241,21 @@ async function startAllScans() {
   }
 }
 
+async function openNextMarktplaatsHunt() {
+  if (!hasApi || !window.api.marktplaatsOpenNextHunt || marktplaatsHuntBusy) return;
+  marktplaatsHuntBusy = true;
+  renderMarktplaatsStatus();
+  try {
+    applyMarktplaatsSnapshot(await window.api.marktplaatsOpenNextHunt());
+  } catch (error) {
+    marktplaatsStatus = { ...marktplaatsStatus, health: 'error', error: error && error.message ? error.message : String(error) };
+    renderMarktplaatsStatus();
+  } finally {
+    marktplaatsHuntBusy = false;
+    renderMarktplaatsStatus();
+  }
+}
+
 async function startScan(opts = {}) {
   if (scanAllRunning) return;
   if (activePlatform === 'vinted') {
@@ -2231,8 +2292,11 @@ async function startScan(opts = {}) {
     return;
   }
   if (activePlatform === 'marktplaats') {
+    if (!marktplaatsStatus.configured) {
+      await openNextMarktplaatsHunt();
+      return;
+    }
     if (!hasApi || !window.api.marktplaatsScanNow || marktplaatsStatus.running || !marktplaatsStatus.configured) {
-      if (!marktplaatsStatus.configured) openMarktplaatsSettings();
       return;
     }
     marktplaatsStatus = { ...marktplaatsStatus, running: true, health: 'scanning', progress: { checked: 0, total: marktplaatsStatus.targetCount || 0 } };
@@ -3022,6 +3086,13 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   $('marktplaats-scan-now').addEventListener('click', () => startScan());
   $('marktplaats-configure').addEventListener('click', openMarktplaatsSettings);
+  $('marktplaats-hunt-reset').addEventListener('click', async () => {
+    if (!hasApi || !window.api.marktplaatsResetHunts || marktplaatsHuntBusy) return;
+    marktplaatsHuntBusy = true; renderMarktplaatsStatus();
+    try { applyMarktplaatsSnapshot(await window.api.marktplaatsResetHunts()); }
+    catch (error) { marktplaatsStatus = { ...marktplaatsStatus, health: 'error', error: error && error.message ? error.message : String(error) }; }
+    finally { marktplaatsHuntBusy = false; renderMarktplaatsStatus(); }
+  });
   $('marktplaats-enabled').addEventListener('change', async () => {
     if (!hasApi || !window.api.marktplaatsSetEnabled) return;
     $('marktplaats-enabled').disabled = true;

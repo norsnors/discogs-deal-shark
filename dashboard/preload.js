@@ -73,6 +73,9 @@ contextBridge.exposeInMainWorld('api', {
   marktplaatsSetEnabled: (enabled) => ipcRenderer.invoke('marktplaats:setEnabled', !!enabled),
   marktplaatsConfigure: (options) => ipcRenderer.invoke('marktplaats:configure', options || {}),
   marktplaatsScanNow: () => ipcRenderer.invoke('marktplaats:scanNow'),
+  marktplaatsPrepareHunts: () => ipcRenderer.invoke('marktplaats:prepareHunts'),
+  marktplaatsOpenNextHunt: () => ipcRenderer.invoke('marktplaats:openNextHunt'),
+  marktplaatsResetHunts: () => ipcRenderer.invoke('marktplaats:resetHunts'),
   onMarktplaatsUpdate: (cb) => {
     const h = (_e, m) => cb(m);
     ipcRenderer.on('marktplaats:update', h);

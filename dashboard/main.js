@@ -33,7 +33,7 @@ const { createTraderaClient } = require('./tradera/client');
 const { createTraderaService } = require('./tradera/service');
 const { createMarktplaatsClient } = require('./marktplaats/client');
 const { createMarktplaatsService } = require('./marktplaats/service');
-const { runAllScans } = require('./all-scan');
+const { runAllScans, planMarktplaatsAllScan } = require('./all-scan');
 
 // Preserve settings for users upgrading from Deal Watcher. Electron derives a new user-data folder
 // from productName; switching blindly would make an upgraded app look like a clean install. Fresh
@@ -1999,6 +1999,7 @@ function getMarktplaatsService() {
     loadWantlist: async (config) => getMarktplaatsDiscogsClient(config).getWantlist(config.username),
     loadMedians: async () => localRealMedians(),
     loadReleaseMetadata: loadMarktplaatsReleaseMetadata,
+    openExternal: (url) => shell.openExternal(url),
     emit: (payload) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('marktplaats:update', payload);
     },
@@ -2037,6 +2038,7 @@ async function runAllMarketplaceScans(win) {
     const ebaySnapshot = ebay.snapshot();
     const traderaSnapshot = tradera.snapshot();
     const marktplaatsSnapshot = marktplaats.snapshot();
+    const marktplaatsPlan = planMarktplaatsAllScan(marktplaatsSnapshot.status, !!config.username && !!config.token);
     const runner = (run, skipReason = null) => skipReason ? { skipReason } : { run };
     const runService = async (run) => {
       const result = await run();
@@ -2070,9 +2072,8 @@ async function runAllMarketplaceScans(win) {
             : (traderaSnapshot.status.running ? 'Tradera is already scanning' : null),
         ),
         marktplaats: runner(
-          () => runService(() => marktplaats.runOnce({ all: true })),
-          !(marktplaatsSnapshot.status && marktplaatsSnapshot.status.configured) ? 'Marktplaats API credentials are not configured'
-            : (marktplaatsSnapshot.status.running ? 'Marktplaats is already scanning' : null),
+          () => runService(() => marktplaatsPlan.mode === 'native' ? marktplaats.prepareNativeHunts() : marktplaats.runOnce({ all: true })),
+          marktplaatsPlan.skipReason,
         ),
       },
       onUpdate: send,
@@ -2147,6 +2148,9 @@ ipcMain.handle('marktplaats:snapshot', () => getMarktplaatsService().snapshot())
 ipcMain.handle('marktplaats:setEnabled', (_e, enabled) => getMarktplaatsService().setEnabled(!!enabled));
 ipcMain.handle('marktplaats:configure', (_e, options) => getMarktplaatsService().configure(options || {}));
 ipcMain.handle('marktplaats:scanNow', () => getMarktplaatsService().runOnce({ all: true }));
+ipcMain.handle('marktplaats:prepareHunts', () => getMarktplaatsService().prepareNativeHunts());
+ipcMain.handle('marktplaats:openNextHunt', () => getMarktplaatsService().openNextNativeHunt());
+ipcMain.handle('marktplaats:resetHunts', () => getMarktplaatsService().resetNativeHunts());
 ipcMain.handle('scout:run', (e, opts) => runScout(BrowserWindow.fromWebContents(e.sender), opts || {}));
 ipcMain.handle('scout:cancel', () => { scoutAbort = true; return true; });
 ipcMain.handle('scout:last', () => lastScout());

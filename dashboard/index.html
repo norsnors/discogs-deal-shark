@@ -197,21 +197,22 @@
       </div>
     </section>
 
-    <section id="marktplaats-panel" class="vinted-panel marktplaats-panel hidden" aria-label="Marktplaats API controls">
+    <section id="marktplaats-panel" class="vinted-panel marktplaats-panel hidden" aria-label="Marktplaats wantlist hunts and API controls">
       <div class="vinted-panel-copy">
-        <div class="vinted-kicker">MARKTPLAATS · OFFICIAL API V2</div>
-        <h3>Wantlist scanner</h3>
-        <p>Search fixed-price Marktplaats ads through the official API, verify the exact Discogs pressing and compare asking price plus your shipping estimate with sold medians. Only strict deals trigger desktop alerts.</p>
+        <div class="vinted-kicker">MARKTPLAATS · NATIVE ALERTS / API V2</div>
+        <h3>Wantlist hunts</h3>
+        <p>Works without API access: open one high-value Discogs pressing at a time, then click “Bewaar je zoekopdracht” on Marktplaats. The query includes release evidence and a strict asking-price ceiling. Native results stay unverified until you inspect the ad.</p>
       </div>
       <div class="vinted-panel-controls">
-        <label class="switch-row vinted-switch" for="marktplaats-enabled">
+        <label class="switch-row vinted-switch marktplaats-api-only" for="marktplaats-enabled">
           <input type="checkbox" id="marktplaats-enabled" />
           <span aria-hidden="true"></span>
           <b>Background watch</b>
         </label>
-        <button id="marktplaats-scan-now" class="primary vinted-scan-now" type="button">Scan Marktplaats now</button>
+        <button id="marktplaats-scan-now" class="primary vinted-scan-now" type="button">Open next hunt</button>
+        <button id="marktplaats-hunt-reset" class="ghost vinted-backfill marktplaats-native-only hidden" type="button">Start hunts over</button>
         <button id="marktplaats-configure" class="ghost vinted-backfill" type="button">API settings</button>
-        <label class="vinted-interval" for="marktplaats-poll-interval">
+        <label class="vinted-interval marktplaats-api-only" for="marktplaats-poll-interval">
           <span>Polling</span>
           <select id="marktplaats-poll-interval">
             <option value="15">Every 15 min</option>
@@ -222,11 +223,11 @@
         </label>
       </div>
       <div class="vinted-panel-status">
-        <span class="vinted-health is-idle" id="marktplaats-health"><i aria-hidden="true"></i><b id="marktplaats-health-label">Setup needed</b></span>
-        <span class="vinted-status-item"><span>Last scan</span><b id="marktplaats-last-scan">Not yet</b></span>
-        <span class="vinted-status-item"><span>Next scan</span><b id="marktplaats-next-scan">—</b></span>
-        <span class="vinted-status-item"><span>Local budget</span><b id="marktplaats-api-calls">0 / 4,000</b></span>
-        <span class="vinted-status-message" id="marktplaats-status-message" aria-live="polite">Add API partner credentials assigned by Marktplaats to connect official search.</span>
+        <span class="vinted-health is-idle" id="marktplaats-health"><i aria-hidden="true"></i><b id="marktplaats-health-label">No API needed</b></span>
+        <span class="vinted-status-item"><span id="marktplaats-last-label">Last opened</span><b id="marktplaats-last-scan">Not yet</b></span>
+        <span class="vinted-status-item"><span id="marktplaats-next-label">Progress</span><b id="marktplaats-next-scan">Preparing…</b></span>
+        <span class="vinted-status-item"><span id="marktplaats-budget-label">Mode</span><b id="marktplaats-api-calls">Native alerts</b></span>
+        <span class="vinted-status-message" id="marktplaats-status-message" aria-live="polite">Deal Shark will prepare up to 100 high-value saved-search hunts from your Discogs wantlist.</span>
       </div>
     </section>
 
