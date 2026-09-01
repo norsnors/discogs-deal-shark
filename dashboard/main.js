@@ -1999,6 +1999,7 @@ function getMarktplaatsService() {
     loadWantlist: async (config) => getMarktplaatsDiscogsClient(config).getWantlist(config.username),
     loadMedians: async () => localRealMedians(),
     loadReleaseMetadata: loadMarktplaatsReleaseMetadata,
+    openExternal: (url) => shell.openExternal(url),
     emit: (payload) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('marktplaats:update', payload);
     },
@@ -2147,6 +2148,9 @@ ipcMain.handle('marktplaats:snapshot', () => getMarktplaatsService().snapshot())
 ipcMain.handle('marktplaats:setEnabled', (_e, enabled) => getMarktplaatsService().setEnabled(!!enabled));
 ipcMain.handle('marktplaats:configure', (_e, options) => getMarktplaatsService().configure(options || {}));
 ipcMain.handle('marktplaats:scanNow', () => getMarktplaatsService().runOnce({ all: true }));
+ipcMain.handle('marktplaats:prepareHunts', () => getMarktplaatsService().prepareNativeHunts());
+ipcMain.handle('marktplaats:openNextHunt', () => getMarktplaatsService().openNextNativeHunt());
+ipcMain.handle('marktplaats:resetHunts', () => getMarktplaatsService().resetNativeHunts());
 ipcMain.handle('scout:run', (e, opts) => runScout(BrowserWindow.fromWebContents(e.sender), opts || {}));
 ipcMain.handle('scout:cancel', () => { scoutAbort = true; return true; });
 ipcMain.handle('scout:last', () => lastScout());

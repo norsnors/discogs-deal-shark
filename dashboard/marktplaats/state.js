@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const { rareGemTransition } = require('../vinted/policy');
 
-const VERSION = 1;
+const VERSION = 2;
 const SECRET_KEY = /^(?:raw|rawResponse|rawPayload|authorization|token|access[_-]?token|refresh[_-]?token|headers?|clientSecret|secret)$/i;
 
 function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
@@ -25,6 +25,19 @@ function cap(records, limit) {
   }
   return [...map.values()].sort((a, b) => timestamp(b.ts ?? b.observedAt, 0) - timestamp(a.ts ?? a.observedAt, 0)).slice(0, limit);
 }
+function normalizeNativeHunts(value = {}) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const openedReleaseIds = [...new Set((Array.isArray(input.openedReleaseIds) ? input.openedReleaseIds : [])
+    .map((entry) => String(entry || '').trim()).filter(Boolean))].slice(-100);
+  const lastOpened = input.lastOpened && typeof input.lastOpened === 'object' ? sanitize(input.lastOpened) : null;
+  return {
+    preparedAt: input.preparedAt ? timestamp(input.preparedAt, null) : null,
+    total: Math.min(100, Math.max(0, Number(input.total) || 0)),
+    eligibleTotal: Math.max(0, Number(input.eligibleTotal) || 0),
+    openedReleaseIds,
+    lastOpened,
+  };
+}
 function normalize(input = {}) {
   const value = sanitize(input) || {};
   return {
@@ -37,6 +50,7 @@ function normalize(input = {}) {
     gems: cap(value.gems, 250),
     availability: value.availability && typeof value.availability === 'object' && !Array.isArray(value.availability) ? value.availability : {},
     wantlist: Array.isArray(value.wantlist) ? value.wantlist.slice(0, 10000) : [],
+    nativeHunts: normalizeNativeHunts(value.nativeHunts),
     health: value.health && typeof value.health === 'object' ? value.health : {},
   };
 }
@@ -97,8 +111,11 @@ if (require.main === module && process.argv.includes('--selftest')) {
   state.addMatch({ id: 'marktplaats:2', alertEligible: false, lowest: 20 });
   state.observeAvailability('a', false);
   assert.strictEqual(state.observeAvailability('a', true).transition.isRareGem, true);
+  state.update({ nativeHunts: { total: 120, eligibleTotal: 140, openedReleaseIds: ['10', '10', '11'], lastOpened: { releaseId: 11, rawPayload: 'never' } } });
   const disk = fs.readFileSync(file, 'utf8');
   assert.ok(!disk.includes('never') && !disk.includes('clientSecret'));
   assert.strictEqual(state.get().matches.length, 1);
+  assert.deepStrictEqual(state.get().nativeHunts.openedReleaseIds, ['10', '11']);
+  assert.strictEqual(state.get().nativeHunts.total, 100, 'native saved-search hunts stay within the conservative personal-use cap');
   console.log('marktplaats state selftest: OK');
 }

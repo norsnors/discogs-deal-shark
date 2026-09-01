@@ -17,6 +17,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const LIVE_TTL_MS = 7 * DAY_MS;
 // This is a local safety budget, not a claim about the partner-specific Marktplaats quota.
 const MAX_DAILY_CALLS = 4000;
+const MAX_NATIVE_HUNTS = 100;
 
 function clamp(value, min, max, fallback) {
   const number = Number(value);
@@ -116,6 +117,60 @@ function evidenceDetail(listing, detail = {}) {
 function queryFor(target) {
   return `${target.artist || ''} ${target.title || ''} vinyl`.replace(/\s+/g, ' ').trim().slice(0, 120);
 }
+function nativeTargets(index = {}, config = {}) {
+  const minDiscount = Number.isFinite(Number(config.minDiscount)) ? Number(config.minDiscount) : 0.5;
+  const minReference = Number.isFinite(Number(config.minReference)) ? Number(config.minReference) : 25;
+  const shippingEstimate = Math.max(0, Number(config.shippingEstimate) || 0);
+  const pressings = [];
+  for (const group of Array.isArray(index.targets) ? index.targets : []) {
+    for (const pressing of Array.isArray(group.pressings) ? group.pressings : [group]) {
+      const reference = Number(pressing && pressing.median);
+      if (!pressing || pressing.releaseId == null || !Number.isFinite(reference) || reference < minReference) continue;
+      const priceCeiling = Math.floor(Math.max(0, reference * (1 - minDiscount) - shippingEstimate) * 100) / 100;
+      if (priceCeiling < 1) continue;
+      pressings.push({
+        releaseId: pressing.releaseId,
+        artist: pressing.artist || group.artist || '',
+        title: pressing.title || group.title || '',
+        year: pressing.year || group.year || null,
+        thumb: pressing.thumb || group.thumb || null,
+        reference,
+        priceCeiling,
+        shippingEstimate,
+      });
+    }
+  }
+  const unique = new Map();
+  for (const target of pressings) unique.set(String(target.releaseId), target);
+  const eligible = [...unique.values()].sort((a, b) => b.reference - a.reference || String(a.artist).localeCompare(String(b.artist)) || String(a.title).localeCompare(String(b.title)));
+  return { eligibleTotal: eligible.length, hunts: eligible.slice(0, MAX_NATIVE_HUNTS) };
+}
+function nativeFormatToken(metadata = {}) {
+  const values = (Array.isArray(metadata.formats) ? metadata.formats : []).flatMap((format) => [format && format.name, ...(Array.isArray(format && format.descriptions) ? format.descriptions : [])]).map((value) => String(value || '').toLowerCase());
+  if (values.some((value) => /\b12\s*(?:inch|\")/.test(value))) return '12 inch';
+  if (values.some((value) => /\b7\s*(?:inch|\")/.test(value))) return '7 inch';
+  if (values.some((value) => /\blp\b/.test(value))) return 'LP';
+  return 'vinyl';
+}
+function nativeCatalogNumber(metadata = {}) {
+  const labels = Array.isArray(metadata.labels) ? metadata.labels : [];
+  const value = labels.map((label) => String(label && (label.catno || label.catalogNumber) || '').trim())
+    .find((entry) => entry && !/^(?:none|n\/a|unknown)$/i.test(entry) && entry.length <= 40);
+  return value || '';
+}
+function nativeQueryFor(target = {}, metadata = {}) {
+  const catalogNumber = nativeCatalogNumber(metadata);
+  const format = nativeFormatToken(metadata);
+  const versionEvidence = catalogNumber || target.year || '';
+  return `${target.artist || ''} ${target.title || ''} ${versionEvidence} ${format}`.replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+function nativeSearchUrl(query, priceCeiling) {
+  const text = String(query || '').trim().slice(0, 120);
+  const centsLimit = Math.max(100, Math.floor(Number(priceCeiling) * 100));
+  if (!text || !Number.isFinite(centsLimit)) throw new Error('A native Marktplaats hunt needs a query and price ceiling.');
+  const encoded = encodeURIComponent(text).replace(/%20/g, '+');
+  return `https://www.marktplaats.nl/l/cd-s-en-dvd-s/#q:${encoded}|PriceCentsTo:${centsLimit}`;
+}
 
 function createMarktplaatsService(options = {}) {
   if (!options.stateFile) throw new Error('createMarktplaatsService needs stateFile.');
@@ -126,6 +181,7 @@ function createMarktplaatsService(options = {}) {
   const emit = typeof options.emit === 'function' ? options.emit : () => {};
   const clientFactory = options.clientFactory || createMarktplaatsClient;
   const state = createMarktplaatsState(options.stateFile);
+  const openExternal = typeof options.openExternal === 'function' ? options.openExternal : null;
   let client = null;
   let clientSignature = '';
   let timer = null;
@@ -137,6 +193,8 @@ function createMarktplaatsService(options = {}) {
   let progress = null;
   let context = null;
   let contextLoadedAt = 0;
+  let nativePlan = [];
+  let nativePlanSignature = '';
   let callsToday = Number(state.get().health.callsToday) || 0;
   let callDay = state.get().health.callDay || new Date(now()).toISOString().slice(0, 10);
 
@@ -191,6 +249,20 @@ function createMarktplaatsService(options = {}) {
       thumb: value.thumb || null, checkedAt: value.checkedAt || null, url: value.url || `https://www.marktplaats.nl/q/${encodeURIComponent(`${value.artist || ''} ${value.title || ''} vinyl`)}/`,
     })).sort((a, b) => (b.checkedAt || 0) - (a.checkedAt || 0));
   }
+  function nativeHuntStatus(snapshot = state.get()) {
+    const value = snapshot.nativeHunts || {};
+    const opened = Array.isArray(value.openedReleaseIds) ? value.openedReleaseIds.length : 0;
+    const total = Math.max(0, Number(value.total) || 0);
+    return {
+      preparedAt: value.preparedAt || null,
+      total,
+      eligibleTotal: Math.max(total, Number(value.eligibleTotal) || 0),
+      opened,
+      remaining: Math.max(0, total - opened),
+      complete: total > 0 && opened >= total,
+      lastOpened: value.lastOpened || null,
+    };
+  }
   function publicStatus() {
     refreshDay();
     const cfg = settings(); const snapshot = state.get(); const creds = credentials();
@@ -198,8 +270,9 @@ function createMarktplaatsService(options = {}) {
     return {
       enabled: cfg.enabled,
       configured: hasCredentials,
+      mode: hasCredentials ? 'api' : 'native',
       running,
-      health: running ? 'scanning' : (lastError ? 'error' : (lastPollAt ? 'live' : (hasCredentials ? (cfg.enabled ? 'idle' : 'disabled') : 'setup'))),
+      health: running ? 'scanning' : (hasCredentials ? (lastError ? 'error' : (lastPollAt ? 'live' : (cfg.enabled ? 'idle' : 'disabled'))) : 'native'),
       pollMinutes: cfg.pollMinutes,
       lastPollAt,
       nextPollAt: cfg.enabled ? nextPollAt : null,
@@ -209,8 +282,9 @@ function createMarktplaatsService(options = {}) {
       cursor: snapshot.cursor || 0,
       progress,
       lastRunStats: snapshot.health && snapshot.health.lastRunStats || null,
-      error: lastError,
-      message: !hasCredentials ? 'Add Marktplaats API partner credentials to connect official search.'
+      nativeHunts: nativeHuntStatus(snapshot),
+      error: hasCredentials ? lastError : null,
+      message: !hasCredentials ? 'No API needed: open a high-value wantlist hunt, then click “Bewaar je zoekopdracht” on Marktplaats for native notifications.'
         : (lastPollAt ? 'Official Marktplaats API · fixed-price listings · pressing-matched against your Discogs wantlist.' : 'Marktplaats API is configured and ready.'),
     };
   }
@@ -225,6 +299,64 @@ function createMarktplaatsService(options = {}) {
     };
   }
   function publish(extra) { const value = snapshot(extra); try { emit(value); } catch { /* renderer may be closed */ } return value; }
+  async function prepareNativeHunts(force = false) {
+    const ctx = await loadContext(force);
+    const plan = nativeTargets(ctx.index, ctx.config);
+    const signature = JSON.stringify(plan.hunts.map((target) => [target.releaseId, target.reference, target.priceCeiling]));
+    if (force || signature !== nativePlanSignature) {
+      nativePlan = plan.hunts;
+      nativePlanSignature = signature;
+    }
+    const current = state.get().nativeHunts || {};
+    const allowed = new Set(nativePlan.map((target) => String(target.releaseId)));
+    const openedReleaseIds = (current.openedReleaseIds || []).filter((releaseId) => allowed.has(String(releaseId)));
+    const changed = current.total !== nativePlan.length || current.eligibleTotal !== plan.eligibleTotal
+      || openedReleaseIds.length !== (current.openedReleaseIds || []).length;
+    if (changed || !current.preparedAt || force) {
+      state.update({ nativeHunts: { ...current, preparedAt: now(), total: nativePlan.length, eligibleTotal: plan.eligibleTotal, openedReleaseIds } });
+    }
+    return publish();
+  }
+  async function openNextNativeHunt() {
+    await prepareNativeHunts(false);
+    if (!openExternal) throw new Error('Opening Marktplaats searches is unavailable in this build.');
+    const current = state.get().nativeHunts || {};
+    const opened = new Set((current.openedReleaseIds || []).map(String));
+    const target = nativePlan.find((entry) => !opened.has(String(entry.releaseId)));
+    if (!target) return publish({ nativeHunt: null, huntComplete: true });
+    const ctx = context || await loadContext(false);
+    let metadata = {};
+    try { metadata = await options.loadReleaseMetadata(target.releaseId, ctx.config) || {}; } catch { metadata = {}; }
+    const query = nativeQueryFor(target, metadata);
+    const url = nativeSearchUrl(query, target.priceCeiling);
+    if (!safeMarktplaatsUrl(url)) throw new Error('Deal Shark refused an unsafe Marktplaats search URL.');
+    const hunt = {
+      releaseId: target.releaseId,
+      artist: target.artist,
+      title: target.title,
+      year: target.year,
+      thumb: target.thumb,
+      reference: target.reference,
+      priceCeiling: target.priceCeiling,
+      shippingEstimate: target.shippingEstimate,
+      query,
+      catalogNumber: nativeCatalogNumber(metadata) || null,
+      format: nativeFormatToken(metadata),
+      url,
+      openedAt: now(),
+      pressingVerified: false,
+      alertEligible: false,
+      sourceType: 'native_saved_search',
+    };
+    await openExternal(url);
+    state.update({ nativeHunts: { ...current, total: nativePlan.length, openedReleaseIds: [...opened, String(target.releaseId)].slice(-MAX_NATIVE_HUNTS), lastOpened: hunt } });
+    return publish({ nativeHunt: hunt, huntComplete: false });
+  }
+  function resetNativeHunts() {
+    const current = state.get().nativeHunts || {};
+    state.update({ nativeHunts: { ...current, openedReleaseIds: [], lastOpened: null } });
+    return publish();
+  }
   async function metadataFor(group, config) {
     const result = {};
     for (const pressing of Array.isArray(group.pressings) ? group.pressings : [group]) {
@@ -378,10 +510,10 @@ function createMarktplaatsService(options = {}) {
     options.writeSettings(next); client = null; clientSignature = ''; schedule(); return snapshot();
   }
   function resetClient() { client = null; clientSignature = ''; lastError = null; return snapshot(); }
-  return { start, stop, snapshot, runOnce, setEnabled, configure, resetClient };
+  return { start, stop, snapshot, runOnce, setEnabled, configure, resetClient, prepareNativeHunts, openNextNativeHunt, resetNativeHunts };
 }
 
-module.exports = { createMarktplaatsService, normalizeMarktplaatsItem, safeMarktplaatsUrl, fixedPrice, itemAvailable, queryFor, MAX_DAILY_CALLS };
+module.exports = { createMarktplaatsService, normalizeMarktplaatsItem, safeMarktplaatsUrl, fixedPrice, itemAvailable, queryFor, nativeTargets, nativeQueryFor, nativeSearchUrl, MAX_DAILY_CALLS, MAX_NATIVE_HUNTS };
 
 if (require.main === module && process.argv.includes('--selftest')) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deal-shark-marktplaats-service-'));
@@ -393,6 +525,7 @@ if (require.main === module && process.argv.includes('--selftest')) {
     seller: { sellerId: 7, sellerName: 'vinylseller' }, location: { postcode: '2011AA', cityName: 'Haarlem' },
     _links: { 'mp:advertisement-website-link': { href: 'http://link.marktplaats.nl/m123' } },
   };
+  const opened = [];
   const service = createMarktplaatsService({
     stateFile: path.join(dir, 'state.json'), readSettings: () => settings, writeSettings: (patch) => { settings = { ...settings, ...patch }; },
     readConfig: () => config,
@@ -400,6 +533,7 @@ if (require.main === module && process.argv.includes('--selftest')) {
     loadMedians: async () => ({ 1: { median: 80 } }),
     loadReleaseMetadata: async () => ({ year: 1978, title: 'I’m A Man', artist: 'Macho', formats: [{ name: 'Vinyl', descriptions: ['12"', 'Original'] }], labels: [{ name: 'Goody Music', catno: 'GO 123' }] }),
     getCredentials: () => ({ clientId: 'client', clientSecret: 'secret' }),
+    openExternal: async (url) => { opened.push(url); },
     clientFactory: () => ({ search: async () => ({ total: 1, items: [summary] }), getAdvertisement: async () => ({ ...summary, attributes: { catalogNumber: 'GO 123', format: '12 inch' } }) }),
   });
   (async () => {
@@ -417,6 +551,15 @@ if (require.main === module && process.argv.includes('--selftest')) {
     assert.strictEqual(result.deals[0].shipping, null);
     assert.strictEqual(result.deals[0].shippingEstimate, 5);
     assert.strictEqual(result.deals[0].sourceType, 'official_api');
+    const prepared = await service.prepareNativeHunts();
+    assert.strictEqual(prepared.status.nativeHunts.total, 1);
+    const native = await service.openNextNativeHunt();
+    assert.strictEqual(native.nativeHunt.alertEligible, false, 'native saved searches never impersonate pressing-verified Deal Shark alerts');
+    assert.ok(native.nativeHunt.query.includes('GO 123') && native.nativeHunt.query.includes('12 inch'));
+    assert.ok(opened[0].includes('PriceCentsTo:3500'), 'native hunt applies the strict asking-price ceiling after shipping');
+    assert.ok(opened[0].startsWith('https://www.marktplaats.nl/l/cd-s-en-dvd-s/#q:'));
+    assert.strictEqual((await service.openNextNativeHunt()).huntComplete, true);
+    assert.strictEqual(service.resetNativeHunts().status.nativeHunts.opened, 0);
     assert.ok(safeMarktplaatsUrl('http://link.marktplaats.nl/m123').startsWith('https://link.marktplaats.nl/'));
     assert.strictEqual(safeMarktplaatsUrl('https://marktplaats.nl.evil.example/m123'), null);
     assert.strictEqual(fixedPrice({ priceModel: { modelType: 'bid', askingPrice: 1000 } }), null);

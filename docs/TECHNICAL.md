@@ -369,7 +369,22 @@ Tradera's documented default limit of 10,000 calls per method per 24 hours. If t
 unavailable, the last successful rate may be reused for at most seven days and is labelled cached.
 New strictly eligible deals use desktop notifications, not cloud email.
 
-### Marktplaats (official API v2)
+### Marktplaats (native saved-search hunts + official API v2)
+
+Without API credentials, the marketplace view builds a local plan of at most 100 high-value Discogs
+wantlist pressings. The plan is sorted by sold median and includes only releases that meet the user's
+minimum reference value and have a positive asking-price ceiling after the configured discount and
+shipping estimate. **Open next hunt** fetches cached Discogs release metadata, adds catalogue number
+and vinyl size where available, and opens a Marktplaats `Cd's en Dvd's` search with the price ceiling
+encoded in the URL. The user then inspects the ad and explicitly clicks **Bewaar je zoekopdracht** on
+Marktplaats. Marktplaats, not Deal Shark, sends the resulting native notifications.
+
+This fallback never fetches or parses Marktplaats result pages, does not use the unofficial internal
+search endpoint, never handles Marktplaats cookies or login credentials, and does not create Deal
+Shark deal cards or desktop alerts. Every hunt is marked `pressingVerified: false` and
+`alertEligible: false`; its only persisted progress is the Discogs release id and the last opened
+search. **Start hunts over** clears that local progress. The official API mode below automatically
+takes precedence once valid partner credentials exist.
 
 The Marktplaats marketplace view uses the documented OAuth2 client-credentials flow, `GET /v2/search`
 and `GET /v2/advertisements/{itemId}`. A Client ID and Client Secret must be assigned by Marktplaats
@@ -397,6 +412,7 @@ desktop alerts. Zero-result observations also feed the rare-appearance transitio
 pressing later returns, it appears under Rare gems regardless of price. A local 4,000-request UTC-day
 safety budget prevents runaway full scans; this is application headroom, not a claim about a
 partner-specific Marktplaats quota. Marktplaats cloud email and Telegram delivery are not implemented.
+Native saved-search notifications remain entirely within the user's Marktplaats account.
 
 ## Desktop releases
 

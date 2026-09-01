@@ -38,8 +38,9 @@ const preserved = [
   'tradera-panel', 'tradera-enabled', 'tradera-scan-now', 'tradera-configure', 'tradera-poll-interval', 'tradera-health',
   'tradera-health-label', 'tradera-last-scan', 'tradera-next-scan', 'tradera-api-calls', 'tradera-status-message',
   'tradera-modal', 'tradera-app-id', 'tradera-app-key', 'tradera-test-btn', 'tradera-save', 'tradera-cancel', 'set-tradera-btn',
-  'marktplaats-panel', 'marktplaats-enabled', 'marktplaats-scan-now', 'marktplaats-configure', 'marktplaats-poll-interval',
+  'marktplaats-panel', 'marktplaats-enabled', 'marktplaats-scan-now', 'marktplaats-hunt-reset', 'marktplaats-configure', 'marktplaats-poll-interval',
   'marktplaats-health', 'marktplaats-health-label', 'marktplaats-last-scan', 'marktplaats-next-scan', 'marktplaats-api-calls',
+  'marktplaats-last-label', 'marktplaats-next-label', 'marktplaats-budget-label',
   'marktplaats-status-message', 'marktplaats-modal', 'marktplaats-client-id', 'marktplaats-client-secret',
   'marktplaats-category-id', 'marktplaats-postcode', 'marktplaats-distance', 'marktplaats-test-btn', 'marktplaats-save',
   'marktplaats-cancel', 'set-marktplaats-btn',
@@ -68,7 +69,7 @@ for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:t
 for (const channel of ['tradera:credentialsStatus', 'tradera:saveCredentials', 'tradera:test', 'tradera:snapshot', 'tradera:setEnabled', 'tradera:configure', 'tradera:scanNow']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Tradera IPC channel ${channel} is wired end-to-end`);
 }
-for (const channel of ['marktplaats:credentialsStatus', 'marktplaats:saveCredentials', 'marktplaats:test', 'marktplaats:snapshot', 'marktplaats:setEnabled', 'marktplaats:configure', 'marktplaats:scanNow']) {
+for (const channel of ['marktplaats:credentialsStatus', 'marktplaats:saveCredentials', 'marktplaats:test', 'marktplaats:snapshot', 'marktplaats:setEnabled', 'marktplaats:configure', 'marktplaats:scanNow', 'marktplaats:prepareHunts', 'marktplaats:openNextHunt', 'marktplaats:resetHunts']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Marktplaats IPC channel ${channel} is wired end-to-end`);
 }
 for (const channel of ['scan:all', 'scan-all:update']) {
@@ -80,6 +81,8 @@ assert.ok(/activePlatform === 'vinted'/.test(renderer) && /activePlatform === 'e
 assert.ok(/safeStorage\.encryptString/.test(main) && !/clientSecret: credentials\.clientSecret/.test(preload), 'eBay Cert ID stays in encrypted main-process storage');
 assert.ok(/TRADERA_CREDENTIALS_FILE/.test(main) && /safeStorage\.encryptString/.test(main) && !/appKey: credentials\.appKey/.test(preload), 'Tradera App Key stays in encrypted main-process storage');
 assert.ok(/MARKTPLAATS_CREDENTIALS_FILE/.test(main) && /safeStorage\.encryptString/.test(main) && !/clientSecret: credentials\.clientSecret/.test(preload), 'Marktplaats Client Secret stays in encrypted main-process storage');
+assert.ok(/Native saved searches/.test(renderer) && /native_saved_search/.test(fs.readFileSync(path.join(__dirname, 'marktplaats', 'service.js'), 'utf8')), 'Marktplaats has a no-API native saved-search handoff');
+assert.ok(/pressingVerified: false/.test(fs.readFileSync(path.join(__dirname, 'marktplaats', 'service.js'), 'utf8')) && /alertEligible: false/.test(fs.readFileSync(path.join(__dirname, 'marktplaats', 'service.js'), 'utf8')), 'native Marktplaats hunts never cross the verified-alert boundary');
 assert.ok(/Content-Security-Policy/.test(html), 'renderer CSP remains present');
 assert.ok(/node_modules\/leaflet\/dist\/leaflet\.js/.test(html), 'interactive map engine is bundled locally');
 
