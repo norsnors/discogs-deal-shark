@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('api', {
   traderaSetEnabled: (enabled) => ipcRenderer.invoke('tradera:setEnabled', !!enabled),
   traderaConfigure: (options) => ipcRenderer.invoke('tradera:configure', options || {}),
   traderaScanNow: () => ipcRenderer.invoke('tradera:scanNow'),
+  traderaCloudSetup: (options) => ipcRenderer.invoke('tradera:cloudSetup', options || {}),
   onTraderaUpdate: (cb) => {
     const h = (_e, m) => cb(m);
     ipcRenderer.on('tradera:update', h);

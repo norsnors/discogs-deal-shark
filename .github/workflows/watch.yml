@@ -4,7 +4,9 @@
 #
 # Setup: push this folder to a GitHub repo, then add repo Secrets:
 #   DISCOGS_TOKEN, DISCOGS_USERNAME, RESEND_API_KEY, MAIL_TO (riminiexpressdj@gmail.com), MAIL_FROM
-# Optional eBay email: EBAY_CLIENT_ID + EBAY_CERT_ID (production keyset, official read-only Browse API)
+# Optional marketplace email:
+#   eBay: EBAY_CLIENT_ID + EBAY_CERT_ID (production keyset, official read-only Browse API)
+#   Tradera: TRADERA_APP_ID + TRADERA_APP_KEY (official read-only REST v4 API)
 #
 # Minutes note: scheduled runs cost Actions minutes on PRIVATE repos (2000/mo free). Each run is
 # short (no npm install needed for the Resend path). */15 ≈ within free tier; raise the interval if
@@ -25,14 +27,15 @@ on:
 permissions:
   contents: write             # to commit deals.json back
 
-concurrency:
-  group: discogs-watch
-  cancel-in-progress: false
-
 jobs:
   sweep:
     runs-on: ubuntu-latest
     timeout-minutes: 95   # budgeted sweeps end themselves around ~75 min; this is the hang backstop
+    # Serialize only Discogs sweeps. A long scheduled fallback must not block the short eBay and
+    # Tradera jobs from later 15-minute Cloudflare dispatches.
+    concurrency:
+      group: discogs-watch-sweep
+      cancel-in-progress: false
     steps:
       # A queued schedule event keeps the commit SHA from the moment it was created. The external
       # 15-minute dispatch can finish while that event waits for this workflow's concurrency lock,
@@ -138,6 +141,9 @@ jobs:
   ebay:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: discogs-watch-ebay
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -172,3 +178,47 @@ jobs:
           MIN_REFERENCE: '25'
           SHIPPING_ESTIMATE: '5'
         run: node watch-ebay-once.js
+
+  # Tradera runs independently from the long Discogs sweep. The Cloudflare dispatch therefore gives
+  # it the same reliable 15-minute wake-up even when the desktop app is closed. Missing secrets are
+  # an intentional clean skip; the first configured run warms dedupe state without historical mail.
+  tradera:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: discogs-watch-tradera
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Restore Tradera cursor, dedupe and email outbox
+        uses: actions/cache@v6
+        with:
+          path: |
+            state/tradera-state.json
+            state/tradera-email-pending.json
+          key: ddw-tradera-state-${{ github.run_id }}
+          restore-keys: ddw-tradera-state-
+
+      - name: Scan Tradera and email strict pressing matches
+        env:
+          DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
+          DISCOGS_USERNAME: ${{ secrets.DISCOGS_USERNAME }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          TRADERA_APP_ID: ${{ secrets.TRADERA_APP_ID }}
+          TRADERA_APP_KEY: ${{ secrets.TRADERA_APP_KEY }}
+          # Twenty targets per 15-minute Cloudflare dispatch keeps worst-case Tradera traffic below
+          # the adapter's conservative 9,500-call UTC-day ceiling, even at three details per search.
+          TRADERA_BATCH_SIZE: '20'
+          MODE: balanced
+          MIN_REFERENCE: '25'
+          SHIPPING_ESTIMATE: '5'
+        run: node watch-tradera-once.js

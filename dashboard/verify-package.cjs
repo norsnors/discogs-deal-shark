@@ -30,6 +30,7 @@ const requiredAppFiles = [
   '/ebay/service.js',
   '/tradera/client.js',
   '/tradera/fx.js',
+  '/tradera/profile.js',
   '/tradera/state.js',
   '/tradera/service.js',
   '/node_modules/leaflet/dist/leaflet.css',

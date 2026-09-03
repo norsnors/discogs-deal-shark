@@ -38,6 +38,7 @@ const preserved = [
   'tradera-panel', 'tradera-enabled', 'tradera-scan-now', 'tradera-configure', 'tradera-poll-interval', 'tradera-health',
   'tradera-health-label', 'tradera-last-scan', 'tradera-next-scan', 'tradera-api-calls', 'tradera-status-message',
   'tradera-modal', 'tradera-app-id', 'tradera-app-key', 'tradera-test-btn', 'tradera-save', 'tradera-cancel', 'set-tradera-btn',
+  'tradera-cloud-github', 'tradera-cloud-connect',
   'marktplaats-panel', 'marktplaats-enabled', 'marktplaats-scan-now', 'marktplaats-configure', 'marktplaats-poll-interval',
   'marktplaats-health', 'marktplaats-health-label', 'marktplaats-last-scan', 'marktplaats-next-scan', 'marktplaats-api-calls',
   'marktplaats-status-message', 'marktplaats-modal', 'marktplaats-client-id', 'marktplaats-client-secret',
@@ -62,10 +63,10 @@ assert.ok(/body\.platform-marktplaats #tab-scout, body\.platform-marktplaats #ta
 for (const channel of ['vinted:snapshot', 'vinted:setEnabled', 'vinted:configure', 'vinted:scanNow', 'vinted:startBackfill', 'vinted:cancelBackfill']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Vinted IPC channel ${channel} is wired end-to-end`);
 }
-for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:test', 'ebay:snapshot', 'ebay:setEnabled', 'ebay:configure', 'ebay:scanNow']) {
+for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:test', 'ebay:snapshot', 'ebay:setEnabled', 'ebay:configure', 'ebay:scanNow', 'ebay:cloudSetup']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `eBay IPC channel ${channel} is wired end-to-end`);
 }
-for (const channel of ['tradera:credentialsStatus', 'tradera:saveCredentials', 'tradera:test', 'tradera:snapshot', 'tradera:setEnabled', 'tradera:configure', 'tradera:scanNow']) {
+for (const channel of ['tradera:credentialsStatus', 'tradera:saveCredentials', 'tradera:test', 'tradera:snapshot', 'tradera:setEnabled', 'tradera:configure', 'tradera:scanNow', 'tradera:cloudSetup']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Tradera IPC channel ${channel} is wired end-to-end`);
 }
 for (const channel of ['marktplaats:credentialsStatus', 'marktplaats:saveCredentials', 'marktplaats:test', 'marktplaats:snapshot', 'marktplaats:setEnabled', 'marktplaats:configure', 'marktplaats:scanNow']) {

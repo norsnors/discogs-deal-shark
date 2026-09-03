@@ -482,6 +482,16 @@
       </label>
       <p class="hint">Prices are returned in SEK and converted to your Discogs currency with the ECB daily reference rate. Seller shipping shown by Tradera is not assumed to be the price to your country, so your existing shipping estimate remains part of deal evaluation.</p>
       <p class="hint"><a href="#" id="tradera-register-help">Open Tradera Developer Center →</a><br /><a href="#" id="tradera-api-help">Read the REST API documentation →</a></p>
+      <div class="provider-cloud-connect">
+        <h3>24/7 email</h3>
+        <p class="hint">Already using the Discogs cloud emails? Paste a GitHub token and press Connect.
+          That explicitly sends your locally saved App ID and App Key, encrypted with your watcher's
+          GitHub public key, so strict Tradera matches can be emailed while this app is closed.</p>
+        <label>GitHub token <span class="opt">(used once, never stored)</span>
+          <input type="password" id="tradera-cloud-github" autocomplete="new-password" spellcheck="false" placeholder="paste token for your cloud watcher" />
+        </label>
+        <button id="tradera-cloud-connect" class="ghost" type="button">Connect Tradera email</button>
+      </div>
       <div id="tradera-test-result" class="test-result"></div>
       <div class="modal-actions">
         <button id="tradera-test-btn" class="ghost">Save &amp; test</button>
@@ -531,8 +541,8 @@
       <p class="hint">Get deal emails around the clock — even when this app is closed. The app creates
         your own free copy of the watcher on <b>GitHub</b> and switches it on for you. You need two free
         accounts: <b>GitHub</b> (runs the scans) and <b>Resend</b> (sends the emails). One-time, ~5 minutes.
-        If eBay is configured, this action also encrypts its App ID and Cert ID as GitHub Secrets so
-        strict eBay matches can be emailed while the app is closed.</p>
+        If eBay or Tradera is configured, this action also encrypts those API credentials as GitHub
+        Secrets so strict marketplace matches can be emailed while the app is closed.</p>
       <label>GitHub token
         <input type="password" id="cloud-github" placeholder="paste a GitHub token here" autocomplete="off" spellcheck="false" />
       </label>

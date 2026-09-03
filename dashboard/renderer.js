@@ -2480,6 +2480,7 @@ async function openTraderaSettings() {
   if (hasApi) credentials = await window.api.traderaCredentialsStatus().catch(() => ({}));
   $('tradera-app-id').value = credentials.appId || '';
   $('tradera-app-key').value = '';
+  $('tradera-cloud-github').value = '';
   $('tradera-app-key').placeholder = credentials.hasKey ? 'saved securely — leave blank to keep' : 'paste once; encrypted on save';
   if (credentials.encryptionAvailable === false) {
     result.textContent = 'Secure credential storage is unavailable; the App Key cannot be saved on this computer.';
@@ -2487,6 +2488,22 @@ async function openTraderaSettings() {
   }
   $('tradera-modal').classList.remove('hidden');
   $('tradera-app-id').focus();
+}
+async function connectTraderaCloudEmail() {
+  const result = $('tradera-test-result');
+  const githubToken = $('tradera-cloud-github').value.trim();
+  if (!githubToken) { result.textContent = 'Paste the GitHub token for your existing cloud watcher first.'; result.className = 'test-result bad'; return; }
+  $('tradera-cloud-connect').disabled = true;
+  result.textContent = 'Encrypting the saved Tradera credentials for your GitHub watcher…'; result.className = 'test-result';
+  try {
+    const response = await window.api.traderaCloudSetup({ githubToken });
+    if (!response || !response.ok) throw new Error(response && response.error || 'Could not connect Tradera cloud email.');
+    $('tradera-cloud-github').value = '';
+    result.textContent = `✓ Tradera email connected to ${response.fork}. The first cloud scan learns existing listings and sends no historical alerts.`;
+    result.className = 'test-result ok';
+  } catch (error) {
+    result.textContent = 'Failed: ' + (error && error.message ? error.message : String(error)); result.className = 'test-result bad';
+  } finally { $('tradera-cloud-connect').disabled = false; }
 }
 function closeTraderaSettings() { $('tradera-modal').classList.add('hidden'); }
 async function saveTraderaSetup(runTest = false) {
@@ -2758,6 +2775,7 @@ async function runCloudSetup() {
     if (r && r.ok) {
       el.textContent = `✓ Done! Your cloud watcher (${r.fork}) is live and running its first scan now. `
         + (r.ebayEmail ? 'Strict eBay email is connected too; its first run only learns existing listings. ' : '')
+        + (r.traderaEmail ? 'Strict Tradera email is connected too; its first run only learns existing listings. ' : '')
         + 'Deal emails start arriving after it has watched your wantlist for a few scans (it learns normal prices first). '
         + 'GitHub runs it roughly every 1–1.5 hours. Check your spam folder for the first email.';
       el.className = 'test-result ok';
@@ -3056,6 +3074,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('tradera-cancel').addEventListener('click', closeTraderaSettings);
   $('tradera-save').addEventListener('click', () => saveTraderaSetup(false));
   $('tradera-test-btn').addEventListener('click', () => saveTraderaSetup(true));
+  $('tradera-cloud-connect').addEventListener('click', connectTraderaCloudEmail);
   $('tradera-register-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.tradera.com/'); });
   $('tradera-api-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.tradera.com/documentation/rest-getting-started'); });
   $('set-marktplaats-btn').addEventListener('click', openMarktplaatsSettings);

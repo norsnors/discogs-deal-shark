@@ -251,13 +251,13 @@ source has its own progress state. Missing credentials and already-running sourc
 skipped; a failure in one adapter never cancels the other scans. The secondary header action still
 scans only the marketplace selected in the switcher.
 
-**Alert boundary:** Vinted, Tradera and Marktplaats are local desktop integrations; their new strictly
-eligible deals trigger desktop notifications only while Deal Shark is open. eBay can additionally use
-desktop notifications and a separate short GitHub Actions job for 24/7 Resend email. That cloud job
-has its own cached cursor, API budget and retrying email outbox. It emails only pressing-verified
-deals and rare appearances; broader dashboard-only matches remain local and never enter the email
-channel. Adding Marktplaats cloud email would require its own encrypted credential flow, cursor, API
-budget and retrying outbox; none is implemented here.
+**Alert boundary:** Vinted and Marktplaats are local desktop integrations; their new strictly eligible
+deals trigger desktop notifications only while Deal Shark is open. eBay and Tradera additionally use
+independent short GitHub Actions jobs for 24/7 Resend email. Both cloud jobs have their own cached
+cursor, API budget and retrying email outbox. They email only pressing-verified deals and rare
+appearances; broader dashboard-only matches remain local and never enter the email channel. Adding
+Marktplaats cloud email would require its own encrypted credential flow, cursor, API budget and
+retrying outbox; none is implemented here.
 
 Vinted has two alert tiers. **Shark deal** keeps the configured strict discount against the exact
 pressing's sold median. **Good Vinted price** maps Vinted `Heel goed` to a conservative VG+ pricing
@@ -367,7 +367,13 @@ Background watch rotates through a small wantlist batch at the chosen interval; 
 checks the whole wantlist. The adapter stops before 9,500 aggregate requests per UTC day, below
 Tradera's documented default limit of 10,000 calls per method per 24 hours. If the ECB feed is briefly
 unavailable, the last successful rate may be reused for at most seven days and is labelled cached.
-New strictly eligible deals use desktop notifications, not cloud email.
+New strictly eligible deals use desktop notifications. When `TRADERA_APP_ID` and `TRADERA_APP_KEY`
+are configured as GitHub Secrets, the same strict matches and rare appearances can also arrive by
+24/7 cloud email. The independent `watch-tradera-once.js` job is woken by the same workflow dispatch
+as the Discogs scan, rotates through 20 targets per run, persists its cursor/dedupe/outbox in an
+Actions cache and treats its first successful run as a silent warm-up. At a reliable 15-minute
+external dispatch, a 715-release wantlist is fully covered in roughly nine hours; the smaller batch
+keeps worst-case daily API use under the adapter's 9,500-call safety ceiling.
 
 ### Marktplaats (official API v2)
 
@@ -508,6 +514,8 @@ Leave the secrets unset to keep it off (the default).
 | `EBAY_CLIENT_ID` / `EBAY_CERT_ID` | optional production eBay App ID + Cert ID for read-only 24/7 eBay email |
 | `EBAY_MARKETPLACE` / `EBAY_DELIVERY_COUNTRY` | eBay marketplace and delivery country (defaults `EBAY_NL` / `NL`) |
 | `EBAY_BATCH_SIZE` | wantlist targets per cloud eBay run (default 10, maximum 25) |
+| `TRADERA_APP_ID` / `TRADERA_APP_KEY` | optional Tradera app credentials for official read-only 24/7 Tradera email |
+| `TRADERA_BATCH_SIZE` | wantlist targets per cloud Tradera run (default 10, workflow uses 20, maximum 25) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | optional Telegram push next to email (see "Telegram push") |
 | `MODE` | `balanced` (default) / `sensitive` / `strict` |
 | `SLICE_SIZE` | releases checked per `watch-once.js` run, by watch-score priority (GitHub model, default 200) |

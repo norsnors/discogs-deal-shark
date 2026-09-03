@@ -31,6 +31,7 @@ const { createEbayClient } = require('./ebay/client');
 const { createEbayService } = require('./ebay/service');
 const { createTraderaClient } = require('./tradera/client');
 const { createTraderaService } = require('./tradera/service');
+const { applyTraderaSettingsFallback } = require('./tradera/profile');
 const { createMarktplaatsClient } = require('./marktplaats/client');
 const { createMarktplaatsService } = require('./marktplaats/service');
 const { runAllScans } = require('./all-scan');
@@ -40,9 +41,11 @@ const { runAllScans } = require('./all-scan');
 // installs use the new Deal Shark folder, while an existing legacy profile remains authoritative.
 const DEFAULT_USER_DATA_DIR = app.getPath('userData');
 const APP_DATA_DIR = app.getPath('appData');
-const LEGACY_USER_DATA_DIRS = app.isPackaged
-  ? [path.join(APP_DATA_DIR, 'Discogs Deal Watcher')]
-  : [path.join(APP_DATA_DIR, 'discogs-deal-dashboard'), path.join(APP_DATA_DIR, 'Electron')];
+const LEGACY_USER_DATA_DIRS = [
+  path.join(APP_DATA_DIR, 'Discogs Deal Watcher'),
+  path.join(APP_DATA_DIR, 'discogs-deal-dashboard'),
+  path.join(APP_DATA_DIR, 'Electron'),
+];
 const PROFILE_MARKERS = ['settings.json', 'config.json', 'last-scan.json', 'last-scout.json', 'last-city-dig.json', 'push-status.json', 'state'];
 function hasDashboardProfile(directory) {
   return PROFILE_MARKERS.some((name) => fs.existsSync(path.join(directory, name)));
@@ -129,7 +132,8 @@ const DEFAULT_SETTINGS = {
 
 function readSettings() {
   try {
-    const settings = { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE(), 'utf8')) };
+    const current = JSON.parse(fs.readFileSync(SETTINGS_FILE(), 'utf8'));
+    const settings = { ...DEFAULT_SETTINGS, ...applyTraderaSettingsFallback(current, LEGACY_USER_DATA_DIRS) };
     if (String(settings.githubRepo).toLowerCase() === 'norsnors/discogs-deal-watcher') {
       settings.githubRepo = 'norsnors/discogs-deal-shark';
     }
@@ -2319,12 +2323,22 @@ async function setupCloud(win, { githubToken, mailTo, resendKey } = {}) {
       secrets.EBAY_CLIENT_ID = ebayCredentials.clientId;
       secrets.EBAY_CERT_ID = ebayCredentials.clientSecret;
     }
+    // Tradera uses app credentials only. The App Key is decrypted in the isolated main process
+    // solely for this explicit setup action, then sealed to GitHub's repository public key.
+    const traderaCredentials = readTraderaCredentials();
+    if (traderaCredentials.appId && traderaCredentials.appKey) {
+      secrets.TRADERA_APP_ID = traderaCredentials.appId;
+      secrets.TRADERA_APP_KEY = traderaCredentials.appKey;
+    }
     for (const [name, value] of Object.entries(secrets)) {
       const encrypted_value = await encryptSecret(pk.key, value);
       const r = await ghReq(githubToken, 'PUT', `/repos/${fork}/actions/secrets/${name}`, { encrypted_value, key_id: pk.key_id });
       if (r.status !== 201 && r.status !== 204) throw new Error('Could not store the ' + name + ' setting (HTTP ' + r.status + ').');
     }
-    step('secrets', 'ok', secrets.EBAY_CERT_ID ? 'Discogs + email + eBay' : 'Discogs + email');
+    const connectedProviders = ['Discogs', 'email'];
+    if (secrets.EBAY_CERT_ID) connectedProviders.push('eBay');
+    if (secrets.TRADERA_APP_KEY) connectedProviders.push('Tradera');
+    step('secrets', 'ok', connectedProviders.join(' + '));
 
     // 4. Switch the sweep on. Workflows in a fork start disabled; enable just ours, then fire the
     // first run so the user sees it working (and gets the first email batch) without waiting for
@@ -2347,7 +2361,13 @@ async function setupCloud(win, { githubToken, mailTo, resendKey } = {}) {
     // job is the 24/7 email. (cronRepo() reads settings.githubRepo first, so the pill lights up.)
     writeSettings({ ...readSettings(), githubRepo: fork });
     step('done', 'ok', fork);
-    return { ok: true, fork, url: `https://github.com/${fork}/actions`, ebayEmail: !!secrets.EBAY_CERT_ID };
+    return {
+      ok: true,
+      fork,
+      url: `https://github.com/${fork}/actions`,
+      ebayEmail: !!secrets.EBAY_CERT_ID,
+      traderaEmail: !!secrets.TRADERA_APP_KEY,
+    };
   } finally {
     cloudSetupRunning = false;
   }
@@ -2384,12 +2404,47 @@ async function setupEbayCloud({ githubToken } = {}) {
   } finally { ebayCloudSetupRunning = false; }
 }
 
+let traderaCloudSetupRunning = false;
+async function setupTraderaCloud({ githubToken } = {}) {
+  if (traderaCloudSetupRunning) throw new Error('Tradera cloud setup is already running.');
+  traderaCloudSetupRunning = true;
+  try {
+    githubToken = String(githubToken || '').trim();
+    if (!githubToken) throw new Error('Paste a GitHub token first.');
+    const credentials = readTraderaCredentials();
+    if (!credentials.appId || !credentials.appKey) throw new Error('Save the Tradera App ID and App Key locally first.');
+    const configuredFork = String(readSettings().githubRepo || '').trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '');
+    if (!configuredFork) throw new Error('Set up “24/7 email alerts” first, then connect Tradera email.');
+
+    const me = await ghReq(githubToken, 'GET', '/user');
+    if (me.status === 401) throw new Error('GitHub rejected the token (401).');
+    if (me.status !== 200 || !me.data || !me.data.login) throw new Error('Could not reach GitHub (HTTP ' + me.status + ').');
+    const fork = await findExistingFork(githubToken, me.data.login);
+    if (!fork || fork.toLowerCase() !== configuredFork.toLowerCase()) throw new Error('The token does not have access to your configured cloud watcher (' + configuredFork + ').');
+
+    const keyResponse = await ghReq(githubToken, 'GET', `/repos/${fork}/actions/secrets/public-key`);
+    if (keyResponse.status !== 200 || !keyResponse.data || !keyResponse.data.key) throw new Error('Could not load the cloud watcher encryption key (HTTP ' + keyResponse.status + ').');
+    for (const [name, value] of Object.entries({ TRADERA_APP_ID: credentials.appId, TRADERA_APP_KEY: credentials.appKey })) {
+      const encrypted_value = await encryptSecret(keyResponse.data.key, value);
+      const response = await ghReq(githubToken, 'PUT', `/repos/${fork}/actions/secrets/${name}`, { encrypted_value, key_id: keyResponse.data.key_id });
+      if (response.status !== 201 && response.status !== 204) throw new Error('Could not store the ' + name + ' setting (HTTP ' + response.status + ').');
+    }
+    const dispatch = await ghReq(githubToken, 'POST', `/repos/${fork}/actions/workflows/${CRON_WORKFLOW}/dispatches`, { ref: 'main' });
+    if (dispatch.status !== 204) throw new Error('Credentials are stored, but starting the first scan failed (HTTP ' + dispatch.status + ').');
+    return { ok: true, fork, url: `https://github.com/${fork}/actions` };
+  } finally { traderaCloudSetupRunning = false; }
+}
+
 ipcMain.handle('cloud:setup', async (e, opts) => {
   try { return await setupCloud(BrowserWindow.fromWebContents(e.sender), opts || {}); }
   catch (err) { return { ok: false, error: err && err.message ? err.message : String(err) }; }
 });
 ipcMain.handle('ebay:cloudSetup', async (_e, opts) => {
   try { return await setupEbayCloud(opts || {}); }
+  catch (err) { return { ok: false, error: err && err.message ? err.message : String(err) }; }
+});
+ipcMain.handle('tradera:cloudSetup', async (_e, opts) => {
+  try { return await setupTraderaCloud(opts || {}); }
   catch (err) { return { ok: false, error: err && err.message ? err.message : String(err) }; }
 });
 

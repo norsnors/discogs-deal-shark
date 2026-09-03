@@ -1,5 +1,8 @@
 # Unreleased
 
+- **24/7 Tradera alerts:** the existing Cloudflare-triggered GitHub workflow now runs a separate
+  read-only Tradera slice with strict pressing verification, its own cursor and retryable email
+  outbox. The first run warms state silently, so existing listings never create a historical flood.
 - **Stricter 7-inch/12-inch Vinted matching:** accepted title matches are now checked against the
   item description before an alert. Hyphenated, typographic-quote, HTML-escaped, metric and common
   European-language size spellings are recognized, and a listing containing a size absent from the
