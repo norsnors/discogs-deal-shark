@@ -146,7 +146,7 @@ const sym = (c) => ({ EUR: '€', USD: '$', GBP: '£', SEK: 'SEK ' }[c] || '');
 const money = (v, c) => (v == null ? '—' : sym(c) + Number(v).toFixed(2));
 const pct = (d) => (d == null ? '—' : Math.round(d * 100) + '%');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
-const REF_LABEL = { 'sold-median': 'real sold median', suggestion: 'VG+ suggested', 'trailing-median': 'usual lowest' };
+const REF_LABEL = { 'sold-median': 'real sold median', suggestion: 'VG+ suggested', 'condition-suggestion': 'Discogs condition value', 'trailing-median': 'usual lowest' };
 
 // "Very Good Plus (VG+)" -> "VG+"
 const gradeShort = (g) => { if (!g) return null; const m = String(g).match(/\(([^)]+)\)/); return m ? m[1] : g; };
@@ -289,7 +289,7 @@ function updateViewCopy() {
   if (vinted) {
     $('view-eyebrow').textContent = gems ? 'VINTED RARITY WATCH' : 'VINTED × YOUR WANTLIST';
     $('view-title').textContent = gems ? 'Wanted records that surfaced again' : 'Vinted deals before they disappear';
-    $('view-intro').textContent = gems ? 'A targeted Vinted search found nothing, then a matching copy appeared — availability is the signal.' : 'Pressing-matched Vinted listings, valued against that exact Discogs release. Reissues and ambiguous versions are ignored.';
+    $('view-intro').textContent = gems ? 'A targeted Vinted search found nothing, then a matching copy appeared — availability is the signal.' : 'Pressing-matched Vinted listings, valued against sold prices or the matching Discogs condition value. Reissues and ambiguous versions are ignored.';
   } else if (ebay) {
     $('view-eyebrow').textContent = gems ? 'EBAY RARITY WATCH' : 'EBAY × YOUR WANTLIST';
     $('view-title').textContent = gems ? 'Wanted records newly available on eBay' : 'eBay deals worth opening';
@@ -426,7 +426,14 @@ function enrich(d) {
   if (d.cheapVgPlusCount > 1) score += Math.min(d.cheapVgPlusCount, 8) * 2; // a cluster = real drop, low risk
   const gone = dealGone(d);
   if (gone) score -= 60; // a dead price should never outrank a live deal in Best-first
-  return Object.assign({}, d, { _ship: ship, _shipReal: shipReal, _total: total, _eff: eff, _savings: savings, _score: score, _gone: gone });
+  const resaleFeeRate = Number.isFinite(Number(d.resaleFeeRate)) ? Number(d.resaleFeeRate) : null;
+  const resaleNet = resaleFeeRate != null && ref > 0 ? ref * (1 - resaleFeeRate) : null;
+  const resaleMargin = resaleNet != null && total != null ? resaleNet - total : null;
+  const resaleRoi = resaleMargin != null && total > 0 ? resaleMargin / total : null;
+  return Object.assign({}, d, {
+    _ship: ship, _shipReal: shipReal, _total: total, _eff: eff, _savings: savings, _score: score, _gone: gone,
+    _resaleNet: resaleNet, _resaleMargin: resaleMargin, _resaleRoi: resaleRoi,
+  });
 }
 
 // The condition chip. For a scan-confirmed deal it shows the REAL media grade read off the live
@@ -435,10 +442,12 @@ function enrich(d) {
 function conditionChip(d) {
   if (d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera' || d.platform === 'marktplaats') {
     const condition = d.itemCondition ? ` · ${esc(d.itemCondition)}` : '';
+    const proxy = d.platform === 'vinted' && d.conditionProxyGrade
+      ? ` ≈ ${esc(gradeShort(d.conditionProxyGrade))}` : '';
     const evidence = Array.isArray(d.pressingEvidence) && d.pressingEvidence.length
       ? ` Evidence: ${d.pressingEvidence.join(', ')}.` : '';
     const source = d.platform === 'ebay' ? 'eBay' : (d.platform === 'tradera' ? 'Tradera' : (d.platform === 'marktplaats' ? 'Marktplaats' : 'Vinted'));
-    return `<span class="tag good" title="Matched to a concrete Discogs pressing from ${source}.${esc(evidence)} Media grade is not verified.">✓ pressing matched${condition}</span>`;
+    return `<span class="tag good" title="Matched to a concrete Discogs pressing from ${source}.${esc(evidence)} ${proxy ? 'The Vinted condition is a pricing proxy; ' : ''}media grade is not play-verified.">✓ pressing matched${condition}${proxy}</span>`;
   }
   if (d.conditionConfirmed && d.mediaCondition) {
     const g = gradeShort(d.mediaCondition);
@@ -550,6 +559,14 @@ function card(d) {
   const dashboardOnly = d.dashboardOnly || d.alertEligible === false
     ? '<span class="tag dashboard-only" title="Safe pressing match shown by your dashboard filters. It does not meet the strict alert boundary.">dashboard match · no alert</span>'
     : '';
+  const goodPrice = d.platform === 'vinted' && d.dealTier === 'good-price'
+    ? '<span class="tag">good Vinted price</span>' : '';
+  const resale = d.platform === 'vinted' && d.referenceSource === 'condition-suggestion' && d._resaleMargin != null
+    ? `<div class="note">↗ possible Discogs resale: about ${money(d._resaleNet, d.currency)} net after 9% fee · ${d._resaleMargin >= 0 ? `${money(d._resaleMargin, d.currency)} (${pct(d._resaleRoi)}) margin` : `${money(Math.abs(d._resaleMargin), d.currency)} short`} before packing and grading risk</div>`
+    : '';
+  const referenceLabel = d.referenceSource === 'condition-suggestion' && d.referenceGrade
+    ? `Discogs ${gradeShort(d.referenceGrade)} value`
+    : (REF_LABEL[d.referenceSource] || 'ref');
   return `<article class="card${d.freshListing ? ' is-fresh' : ''}${d.conditionConfirmed ? ' is-verified' : ''}${isHidden ? ' is-hidden' : ''}${d._gone ? ' is-gone' : ''}${dashboardOnly ? ' is-dashboard-match' : ''}">
     ${dismissBtn}
     <span class="when">${d.platform === 'vinted' || d.platform === 'ebay' || d.platform === 'tradera' || d.platform === 'marktplaats' ? ago(d.ts) : (viewMode === 'scan' ? 'live' : ago(d.ts))}</span>
@@ -563,12 +580,13 @@ function card(d) {
         ${spark}
       </div>
       <div class="subprice ${d._shipReal ? 'ship-real' : 'ship-est'}" title="${shipTitle}">${shipNote}</div>
-      <div class="ref">vs ${money(d.reference, d.currency)} ${REF_LABEL[d.referenceSource] || 'ref'}${d.soldLow != null && d.soldHigh != null ? ` (${money(d.soldLow, d.currency)}–${money(d.soldHigh, d.currency)})` : ''}${save} · ${forSale}</div>
+      <div class="ref">vs ${money(d.reference, d.currency)} ${esc(referenceLabel)}${d.soldLow != null && d.soldHigh != null ? ` (${money(d.soldLow, d.currency)}–${money(d.soldHigh, d.currency)})` : ''}${save} · ${forSale}</div>
       ${cluster}
+      ${resale}
       ${priceHistory}
       ${worn}
       ${alt}
-      <div class="meta">${gone}${dashboardOnly}${fresh}${conditionChip(d)}${ships}${historyTags}</div>
+      <div class="meta">${gone}${dashboardOnly}${goodPrice}${fresh}${conditionChip(d)}${ships}${historyTags}</div>
       <button class="buy" data-url="${esc(d.url)}">${buyLabel}</button>
     </div>
   </article>`;
@@ -1351,10 +1369,14 @@ function notifyVinted(items, kind = 'deal') {
   const extra = items.length > 1 ? ` (+${items.length - 1} more)` : '';
   const title = kind === 'gem'
     ? `💎 Vinted rare gem: ${item.artist || ''} – ${item.title || ''}`
-    : `💸 Vinted deal: ${money(item.lowest, item.currency)} (${pct(item.discount)} off)`;
+    : (item.dealTier === 'good-price'
+        ? `💸 Good Vinted price: ${money(item.lowest, item.currency)} (${pct(item.discount)} below ${gradeShort(item.referenceGrade || '') || 'Discogs'})`
+        : `💸 Vinted deal: ${money(item.lowest, item.currency)} (${pct(item.discount)} off)`);
   const body = kind === 'gem'
     ? `A matching listing surfaced after an empty search at ${money(item.lowest, item.currency)}${extra}`
-    : `${item.artist || ''} – ${item.title || ''}${extra}`;
+    : (item.dealTier === 'good-price' && item.resaleMargin != null
+        ? `${item.artist || ''} – ${item.title || ''} · about ${money(item.resaleMargin, item.currency)} (${pct(item.resaleRoi)}) margin after Discogs fee, before packing/grading${extra}`
+        : `${item.artist || ''} – ${item.title || ''}${extra}`);
   const notification = new Notification(title, { body });
   notification.onclick = () => { openUrl(item.url); window.focus(); };
 }

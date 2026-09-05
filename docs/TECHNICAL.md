@@ -261,6 +261,25 @@ appearances; broader dashboard-only matches remain local and never enter the ema
 Marktplaats cloud email would require its own encrypted credential flow, cursor, API budget and
 retrying outbox; none is implemented here.
 
+Vinted has two alert tiers. **Shark deal** keeps the configured strict discount against the exact
+pressing's sold median. **Good Vinted price** maps Vinted `Heel goed` to a conservative VG+ pricing
+proxy (`Nieuw` to NM), fetches Discogs's cached condition ladder only for an otherwise-matched
+candidate, and accepts a landed total at least 15% below that condition value. Explicit seller text
+such as `Vinyl: VG` overrides the generic Vinted label. These mappings guide price comparison only:
+the card remains `conditionConfirmed: false` because Vinted does not provide Discogs-style play
+grading. `Goed`/VG and lower conditions cannot enter the good-price tier.
+
+Vinted pressing confirmation treats an explicit physical size as a hard constraint. It recognizes
+7, 10 and 12 inches written with straight/typographic quotes, hyphenated `7-inch`, common Dutch,
+English, Italian, French, Spanish, German, Polish and Portuguese units, plus 17/18/25/30 cm. Size
+signals from the catalog payload, title and item description are compared with both Discogs format
+descriptions and format free text. Even an initially accepted title is rechecked with the item-page
+description; any explicitly mentioned size absent from the exact Discogs release produces
+`format-size-conflict` and cannot alert. If the Discogs pressing has a known physical size but the
+Vinted text has none, an exact catalogue number or exact Discogs release URL is required; RPM,
+label and year do not establish diameter. Otherwise the listing is rejected as
+`format-size-unverified`.
+
 Dashboard filters are deliberately broader than that alert boundary. eBay, Tradera and Marktplaats persist every
 conservatively pressing-matched listing in a dashboard-only `matches` collection, while only records
 that pass the configured value and discount rules enter `deals` or `newDeals`. Dashboard-only cards
@@ -521,6 +540,11 @@ Leave the secrets unset to keep it off (the default).
 | `MIN_REFERENCE` | value floor: VG+ suggestion must be ≥ this € to alert (default 25; safe for diamonds) |
 | `SHIPPING_ESTIMATE` | € added to the item price; the alert threshold uses the total (default 5) |
 | `CURRENCY` | price currency (default EUR) |
+
+For Vinted's condition-value tier, the desktop app also calculates an indicative resale result:
+the condition-matched Discogs item value minus the current 9% Discogs seller fee, then minus the
+Vinted landed total. Buyer-paid outbound shipping, packaging, taxes and grading disputes are not
+modeled, so this figure is displayed as a possible margin rather than guaranteed profit.
 
 ## Known limitations (honest list)
 

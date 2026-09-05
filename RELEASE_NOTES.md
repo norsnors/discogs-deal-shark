@@ -5,12 +5,12 @@
   of the v1.4.0 installers.
 - **24/7 Tradera alerts:** the existing Cloudflare-triggered GitHub workflow now runs a separate
   read-only Tradera slice with strict pressing verification, its own cursor and retryable email
-  outbox. The first run warms state silently, so existing listings never create a historical flood.
+  outbox. Each search target warms up silently before its new listings can trigger email.
 - **Marktplaats without partner access:** when OAuth credentials are absent, Deal Shark now uses the
   public search service behind Marktplaats web pages with strict pacing, a 500-request daily budget,
   fixed-price-only matching and no detail requests. Official credentials take over automatically.
-- **Live-state reconciliation:** disappeared marketplace listings are removed from current deals and
-  matches immediately, while historical rare-gem events remain visible with an explicit gone state.
+- **Live-state reconciliation:** marketplace listings missing from complete search results are removed from current deals and
+  matches; partial pages retain earlier observations, while historical rare-gem events remain visible with an explicit gone state.
 - **Honest scan health:** failed target searches no longer advance the successful-scan timestamp;
   complete failures surface as errors and partial failures are marked as incomplete.
 - **Reliable Scan all:** background scans are awaited instead of silently skipped, while platforms
@@ -20,6 +20,20 @@
 - **Marktplaats partner onboarding:** setup now distinguishes a regular account from assigned API
   credentials, includes the official business contact route and a ready-to-use read-only call briefing,
   and reports missing search permission clearly.
+- **Stricter 7-inch/12-inch Vinted matching:** accepted title matches are now checked against the
+  item description before an alert. Hyphenated, typographic-quote, HTML-escaped, metric and common
+  European-language size spellings are recognized, and a listing containing a size absent from the
+  exact Discogs release is rejected. If Discogs knows the size but Vinted states only `45 RPM`, the
+  listing now requires an exact catalogue number or Discogs release link; label and year alone no
+  longer let a 7-inch inherit a 12-inch value. Existing observations are replayed to remove stale
+  wrong-format cards.
+- **Good Vinted prices now alert:** the existing 50%-under-sold-median Shark rule remains, while
+  pressing-verified listings in Vinted `Heel goed` (or better) also qualify when their landed total
+  is at least 15% below Discogs's matching condition value. Vinted condition stays clearly marked
+  as a seller-stated proxy, never confirmed play-grading. Existing Vinted observations are replayed
+  once so newly eligible listings can notify after upgrading. Each condition-value alert also shows
+  an indicative Discogs resale margin after the 9% seller fee, explicitly before packing and grading
+  risk; that estimate is context, never an automatic-buy instruction.
 - **City Dig Antwerp pilot:** interactive, zoomable world and street maps plus a nine-store
   directory, powered by locally bundled Leaflet and OpenStreetMap tiles at no API cost.
 - **Passive first step:** opening City Dig checks only inventory totals for verified sellers.

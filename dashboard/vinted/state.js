@@ -4,9 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { rareGemTransition } = require('./policy');
 
-// Version 3 also verifies vinyl size and rejects compilation listings for non-compilation wants.
-// Older marketplace-derived records may therefore carry an unsafe median and must be re-observed.
-const VERSION = 3;
+// Version 5 replays Vinted observations after expanding 7/10/12-inch recognition and requiring an
+// initially accepted title to survive the item-description pressing check. This removes old cards
+// whose size conflict was previously hidden outside the title. It also lets listings newly eligible
+// for the condition-aware good-price tier (including Elvin 122472) notify once after upgrading.
+const VERSION = 5;
 const DEFAULT_CAPS = Object.freeze({ deals: 500, gems: 250, seenIds: 50000, availability: 10000 });
 const SECRET_KEY = /^(?:raw|rawResponse|rawPayload|rawBody|rawData|cookie|cookies|set-cookie|authorization|token|access[_-]?token|refresh[_-]?token|headers?|session)$/i;
 

@@ -1778,6 +1778,32 @@ function getVintedDiscogsClient(config) {
   }
   return vintedDiscogsClient;
 }
+
+async function loadVintedPriceSuggestion(releaseId, config) {
+  const { engine, makeStore } = loadWatcher();
+  const store = makeStore(stateDir());
+  let suggestion = store.getSuggestion(releaseId);
+  const complete = suggestion && Object.prototype.hasOwnProperty.call(suggestion, 'ladder');
+  if (complete && suggestion.ts && Date.now() - suggestion.ts < SUGGESTION_TTL_MS) return suggestion;
+  try {
+    const raw = await getVintedDiscogsClient(config).getPriceSuggestions(releaseId);
+    suggestion = raw
+      ? {
+          ts: Date.now(),
+          vgplus: raw['Very Good Plus (VG+)']?.value ?? null,
+          vg: raw['Very Good (VG)']?.value ?? null,
+          ladder: engine.extractLadder(raw),
+        }
+      : { ts: Date.now(), vgplus: null, vg: null, ladder: null, unavailable: true };
+    store.setSuggestion(releaseId, suggestion);
+    return suggestion;
+  } catch {
+    // A stale positive cache is safer than silently discarding a useful Discogs reference after a
+    // transient API failure. Missing data simply leaves the listing on the old strict rule.
+    return suggestion || null;
+  }
+}
+
 function getVintedService() {
   if (vintedService) return vintedService;
   vintedService = createVintedService({
@@ -1787,6 +1813,7 @@ function getVintedService() {
     readConfig: readConfigFile,
     loadWantlist: async (config) => getVintedDiscogsClient(config).getWantlist(config.username),
     loadMedians: async () => localRealMedians(),
+    loadPriceSuggestion: loadVintedPriceSuggestion,
     loadReleaseMetadata: async (releaseId, config) => {
       const { makeStore } = loadWatcher();
       const store = makeStore(stateDir());

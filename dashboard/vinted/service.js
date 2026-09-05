@@ -6,6 +6,10 @@ const {
   matchCatalogItem,
   normalizeCatalogItem,
   evaluateListing,
+  vintedConditionProfile,
+  conditionSuggestionReference,
+  estimateDiscogsResale,
+  DEFAULT_GOOD_PRICE_DISCOUNT,
   targetIndexKey,
   resolvePressingMatch,
 } = require('./policy');
@@ -241,7 +245,15 @@ function createVintedService(options = {}) {
       shippingEstimate: evaluation.shippingEstimate,
       reference: evaluation.reference,
       referenceSource: evaluation.referenceSource,
+      referenceGrade: evaluation.referenceGrade || null,
       discount: evaluation.discount,
+      dealTier: evaluation.dealTier || 'shark',
+      conditionProxyGrade: evaluation.conditionProxyGrade || null,
+      conditionProxySource: evaluation.conditionProxySource || null,
+      resaleFeeRate: evaluation.resaleFeeRate ?? null,
+      resaleNet: evaluation.resaleNet ?? null,
+      resaleMargin: evaluation.resaleMargin ?? null,
+      resaleRoi: evaluation.resaleRoi ?? null,
       numForSale: 1,
       matchScore: match.score,
       pressingVerified: true,
@@ -317,17 +329,20 @@ function createVintedService(options = {}) {
   async function resolveVersion(listing, match, ctx) {
     const metadata = await pressingMetadata(match.target, ctx);
     let decision = resolvePressingMatch(listing, match, {}, metadata);
-    // Explicit contradictions are already decisive and do not justify a 1.9 MB item-page fetch.
-    if (decision.accepted || ['reissue-conflict', 'color-conflict', 'original-conflict', 'format-size-conflict', 'compilation-conflict'].includes(decision.reason)) return decision;
-    if (decision.reason === 'metadata-unavailable') return decision;
+    // Explicit contradictions are already decisive and do not justify an item-page fetch. A title
+    // that looks valid is not final, however: sellers often put 7-inch/12-inch only in the item
+    // description. Re-read every initially accepted candidate with those details before alerting.
+    if (['reissue-conflict', 'color-conflict', 'original-conflict', 'format-size-conflict', 'compilation-conflict'].includes(decision.reason)) return { ...decision, details: null };
+    if (decision.reason === 'metadata-unavailable') return { ...decision, details: null };
     const details = await itemDetails(listing);
     decision = resolvePressingMatch(listing, match, details, metadata);
-    return decision;
+    return { ...decision, details };
   }
 
   async function processItems(items, ctx, scanOptions = {}) {
     const cfg = ctx.config || {};
     const minDiscount = Number.isFinite(Number(cfg.minDiscount)) ? Number(cfg.minDiscount) : 0.5;
+    const goodPriceDiscount = Number.isFinite(Number(cfg.vintedGoodPriceDiscount)) ? Number(cfg.vintedGoodPriceDiscount) : DEFAULT_GOOD_PRICE_DISCOUNT;
     const shippingEstimate = Number.isFinite(Number(cfg.shippingEstimate)) ? Number(cfg.shippingEstimate) : 5;
     const minReference = Number.isFinite(Number(cfg.minReference)) ? Number(cfg.minReference) : 0;
     const newDeals = [];
@@ -347,7 +362,7 @@ function createVintedService(options = {}) {
       const pressing = await resolveVersion(listing, match, ctx);
       if (!pressing.accepted) {
         versionRejected += 1;
-        if (['reissue-conflict', 'color-conflict', 'original-conflict', 'format-size-conflict', 'compilation-conflict', 'release-title-not-primary'].includes(pressing.reason)) {
+        if (['reissue-conflict', 'color-conflict', 'original-conflict', 'format-size-conflict', 'format-size-unverified', 'compilation-conflict', 'release-title-not-primary'].includes(pressing.reason)) {
           reissueRejected += 1;
           // If a seller edits a formerly valid item into an explicit incompatible version, do not
           // leave the old pressing card behind as if it were still buyable.
@@ -362,7 +377,49 @@ function createVintedService(options = {}) {
       batchSeen.add(seenKey);
       ids.push(seenKey);
       const unseen = !state.hasSeen(seenKey);
-      const evaluation = evaluateListing(listing, resolvedMatch, { minDiscount, shippingEstimate, reference: pressing.reference });
+      const condition = vintedConditionProfile(listing, pressing.details || {});
+      const strictEvaluation = evaluateListing(listing, resolvedMatch, { minDiscount, shippingEstimate, reference: pressing.reference });
+      let evaluation = {
+        ...strictEvaluation,
+        dealTier: strictEvaluation.isDeal ? 'shark' : null,
+        conditionProxyGrade: condition && condition.grade,
+        conditionProxySource: condition && condition.source,
+      };
+      // A Vinted "Heel goed" copy is closest to Discogs VG+, but is not confirmed play-grading.
+      // The old 50%-under-sold-median rule remains the Shark tier. This second tier catches a
+      // genuinely good cross-market price against Discogs's matching condition value, while exact
+      // pressing evidence, buyer protection and estimated shipping all remain mandatory inputs.
+      if (!strictEvaluation.isDeal && condition && condition.eligible && typeof options.loadPriceSuggestion === 'function') {
+        let suggestion = null;
+        try { suggestion = await options.loadPriceSuggestion(resolvedMatch.target.releaseId, ctx.config); }
+        catch { suggestion = null; }
+        const conditionReference = conditionSuggestionReference(suggestion, condition);
+        if (conditionReference > 0) {
+          const goodPriceEvaluation = evaluateListing(listing, resolvedMatch, {
+            minDiscount: goodPriceDiscount,
+            shippingEstimate,
+            reference: conditionReference,
+            referenceSource: 'condition-suggestion',
+          });
+          evaluation = {
+            ...goodPriceEvaluation,
+            dealTier: goodPriceEvaluation.isDeal ? 'good-price' : null,
+            referenceGrade: condition.grade,
+            conditionProxyGrade: condition.grade,
+            conditionProxySource: condition.source,
+          };
+          if (goodPriceEvaluation.isDeal) {
+            const resale = estimateDiscogsResale(conditionReference, goodPriceEvaluation.total);
+            if (resale) evaluation = {
+              ...evaluation,
+              resaleFeeRate: resale.feeRate,
+              resaleNet: resale.net,
+              resaleMargin: resale.margin,
+              resaleRoi: resale.roi,
+            };
+          }
+        }
+      }
       compatible.push({ raw, listing, match: resolvedMatch, evaluation, pressing });
       const qualifies = evaluation.isDeal && (evaluation.reference || 0) >= minReference;
       if (qualifies) {
@@ -680,7 +737,11 @@ if (require.main === module && process.argv.includes('--selftest')) {
   const fakeClient = {
     async catalog(input) { return { items: input.searchText ? feed : feed, total: feed.length, fetchedAt: clock }; },
     status() { return { state: 'ready', requestCount: 0, lastRequestAt: null }; },
-    async itemPage() { return { description: 'Original pressing TEST 001' }; },
+    async itemPage(url) {
+      return String(url).includes('/items/56')
+        ? { found: true, description: 'Formato: singolo 7 pollici. Catalogo TEST 001.' }
+        : { found: true, description: 'Original pressing TEST 001' };
+    },
     close() {},
   };
   let persistedSettings = { vintedEnabled: false, vintedPollSeconds: 15, vintedDeepHuntSeconds: 60 };
@@ -729,7 +790,68 @@ if (require.main === module && process.argv.includes('--selftest')) {
     result = await service.runOnce({ forceDeep: true });
     assert.strictEqual(result.deals.length, 0, 'an explicit incompatible pressing edit removes the old deal card');
     assert.strictEqual(result.gems.gems.length, 0, 'an explicit incompatible pressing edit removes the old rare-gem card');
+    clock += 61_000;
+    feed = [{ id: 56, title: 'Macho - I’m a Man original TEST 001', price: { amount: '10', currency_code: 'EUR' }, service_fee: { amount: '2' }, url: 'https://www.vinted.nl/items/56' }];
+    result = await service.runOnce({ forceDeep: true });
+    assert.strictEqual(result.deals.length, 0, 'a title that initially looks like the wanted 12-inch is rejected when its description says 7-inch');
+    assert.strictEqual(result.status.lastRunStats.versionRejected > 0, true, 'the description-only size conflict is counted as a rejected version');
     service.stop();
+
+    const elvinStateFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'deal-shark-vinted-elvin-')), 'state.json');
+    const elvinClient = {
+      async catalog() {
+        return {
+          items: [{
+            id: 6199330482,
+            title: 'Disco 12" Elvin - Luggi, Luggi, Ludwig',
+            price: { amount: '35', currency_code: 'EUR' },
+            total_item_price: { amount: '37.45', currency_code: 'EUR' },
+            service_fee: { amount: '2.45', currency_code: 'EUR' },
+            status: 'Heel goed',
+            url: 'https://www.vinted.nl/items/6199330482-disco-12-elvin-luggi-luggi-ludwig',
+          }],
+          total: 1,
+          fetchedAt: clock,
+        };
+      },
+      async itemPage() {
+        return { description: 'Disco e cover in ottimo stato. https://www.discogs.com/release/122472-Elvin-Luggi-Luggi-Ludwig' };
+      },
+      status() { return { state: 'ready', requestCount: 0, lastRequestAt: null }; },
+      close() {},
+    };
+    const elvinService = createVintedService({
+      stateFile: elvinStateFile,
+      now: () => clock,
+      readSettings: () => ({ vintedEnabled: false, vintedPollSeconds: 120, vintedDeepHuntSeconds: 60 }),
+      writeSettings: () => {},
+      readConfig: () => ({ username: 'test', token: 'secret', minDiscount: 0.5, shippingEstimate: 5 }),
+      loadWantlist: async () => [{ releaseId: 122472, artist: 'Elvin', title: 'Luggi, Luggi, Ludwig', year: 1986 }],
+      loadMedians: async () => ({ 122472: { median: 46.24 } }),
+      loadPriceSuggestion: async () => ({ ladder: { 'Very Good Plus (VG+)': 52.325 } }),
+      loadReleaseMetadata: async () => ({
+        id: 122472,
+        year: 1986,
+        formats: [{ name: 'Vinyl', descriptions: ['12"', 'Maxi-Single', '45 RPM'] }],
+        labels: [{ name: 'Bellaphon', catno: '120·05·005' }],
+      }),
+      clientFactory: () => elvinClient,
+    });
+    const elvinResult = await elvinService.runOnce({ forceDeep: true });
+    assert.strictEqual(elvinResult.deals.length, 1, 'Elvin at €35 in Vinted Heel goed now triggers a good-price alert');
+    assert.deepStrictEqual(
+      {
+        tier: elvinResult.deals[0].dealTier,
+        reference: elvinResult.deals[0].reference,
+        grade: elvinResult.deals[0].referenceGrade,
+        total: elvinResult.deals[0].lowest + elvinResult.deals[0].shippingEstimate,
+        resaleNet: Number(elvinResult.deals[0].resaleNet.toFixed(2)),
+        resaleMargin: Number(elvinResult.deals[0].resaleMargin.toFixed(2)),
+        resaleRoi: Number(elvinResult.deals[0].resaleRoi.toFixed(3)),
+      },
+      { tier: 'good-price', reference: 52.325, grade: 'Very Good Plus (VG+)', total: 42.45, resaleNet: 47.62, resaleMargin: 5.17, resaleRoi: 0.122 },
+    );
+    elvinService.stop();
 
     const backfillSize = BACKFILL_BATCH_SIZE + 2;
     const backfillStateFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'deal-shark-vinted-backfill-')), 'state.json');
