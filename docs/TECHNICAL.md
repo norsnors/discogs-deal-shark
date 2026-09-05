@@ -162,8 +162,8 @@ exclusion that could kill the once-in-a-lifetime steal:
 | `dashboard/tradera/fx.js` | daily ECB SEK conversion with an in-memory cache | `node dashboard/tradera/fx.js --selftest` |
 | `dashboard/tradera/state.js` | local Tradera deal, availability, FX and API-budget state; strips secrets | `node dashboard/tradera/state.js --selftest` |
 | `dashboard/tradera/service.js` | fixed-price searches, pressing matching and converted landed-cost evaluation | `node dashboard/tradera/service.js --selftest` |
-| `dashboard/marktplaats/client.js` | official Marktplaats OAuth2 API v2 client; token cache, HAL search normalization and pacing | `node dashboard/marktplaats/client.js --selftest` |
-| `dashboard/marktplaats/state.js` | local Marktplaats deal, match, availability and safety-budget state; strips secrets | `node dashboard/marktplaats/state.js --selftest` |
+| `dashboard/marktplaats/client.js` | paced public-web search fallback plus optional official OAuth2 API v2 client and normalization | `node dashboard/marktplaats/client.js --selftest` |
+| `dashboard/marktplaats/state.js` | local Marktplaats deal, match, availability and safety-budget state; strips secrets, seller IDs and precise postcodes | `node dashboard/marktplaats/state.js --selftest` |
 | `dashboard/marktplaats/service.js` | fixed-price wantlist searches, pressing matching, rare appearances and deal evaluation | `node dashboard/marktplaats/service.js --selftest` |
 | `mailer.js` | Gmail SMTP + HTML deal-email renderer | `node mailer.js --selftest` |
 | `server.js` | tiny token-protected read API for the dashboard | — |
@@ -247,17 +247,19 @@ and never touch the rendered page.
 
 The primary **Scan all** action starts every available adapter together: the full Discogs wantlist,
 Vinted's newest feed plus one Deep Hunt target, and full-wantlist eBay, Tradera and Marktplaats searches. Each
-source has its own progress state. Missing credentials and already-running sources are shown as
-skipped; a failure in one adapter never cancels the other scans. The secondary header action still
+source has its own progress state. A scan that is already running is awaited instead of skipped;
+if that run was already a full marketplace sweep its result is reused. Missing credentials for
+credentialed adapters are labelled **setup needed** and excluded from the progress denominator. A
+failure in one adapter never cancels the other scans. The secondary header action still
 scans only the marketplace selected in the switcher.
 
-**Alert boundary:** Vinted, Tradera and Marktplaats are local desktop integrations; their new strictly
-eligible deals trigger desktop notifications only while Deal Shark is open. eBay can additionally use
-desktop notifications and a separate short GitHub Actions job for 24/7 Resend email. That cloud job
-has its own cached cursor, API budget and retrying email outbox. It emails only pressing-verified
-deals and rare appearances; broader dashboard-only matches remain local and never enter the email
-channel. Adding Marktplaats cloud email would require its own encrypted credential flow, cursor, API
-budget and retrying outbox; none is implemented here.
+**Alert boundary:** Vinted and Marktplaats are local desktop integrations; their new strictly eligible
+deals trigger desktop notifications only while Deal Shark is open. eBay and Tradera additionally use
+independent short GitHub Actions jobs for 24/7 Resend email. Both cloud jobs have their own cached
+cursor, API budget and retrying email outbox. They email only pressing-verified deals and rare
+appearances; broader dashboard-only matches remain local and never enter the email channel. Adding
+Marktplaats cloud email would require its own encrypted credential flow, cursor, API budget and
+retrying outbox; none is implemented here.
 
 Dashboard filters are deliberately broader than that alert boundary. eBay, Tradera and Marktplaats persist every
 conservatively pressing-matched listing in a dashboard-only `matches` collection, while only records
@@ -348,22 +350,38 @@ Background watch rotates through a small wantlist batch at the chosen interval; 
 checks the whole wantlist. The adapter stops before 9,500 aggregate requests per UTC day, below
 Tradera's documented default limit of 10,000 calls per method per 24 hours. If the ECB feed is briefly
 unavailable, the last successful rate may be reused for at most seven days and is labelled cached.
-New strictly eligible deals use desktop notifications, not cloud email.
+New strictly eligible deals use desktop notifications. When `TRADERA_APP_ID` and `TRADERA_APP_KEY`
+are configured as GitHub Secrets, the same strict matches and rare appearances can also arrive by
+24/7 cloud email. The independent `watch-tradera-once.js` job is woken by the same workflow dispatch
+as the Discogs scan, rotates through 20 targets per run, persists its cursor/dedupe/outbox in an
+Actions cache and treats its first successful run as a silent warm-up. At a reliable 15-minute
+external dispatch, a 715-release wantlist is fully covered in roughly nine hours; the smaller batch
+keeps worst-case daily API use under the adapter's 9,500-call safety ceiling.
 
-### Marktplaats (official API v2)
+### Marktplaats (public web fallback + optional official API v2)
 
-The Marktplaats marketplace view uses the documented OAuth2 client-credentials flow, `GET /v2/search`
-and `GET /v2/advertisements/{itemId}`. A Client ID and Client Secret must be assigned by Marktplaats
-for an approved API integration; Deal Shark cannot create those credentials. The Client ID is stored
-locally and the Client Secret is encrypted with Electron `safeStorage` in
-`marktplaats-credentials.json`. Access tokens remain in memory and are refreshed after expiry or a
-401 response. The integration does not scrape Marktplaats webpages.
+Without credentials, the Marktplaats marketplace view reads JSON from the public search service used
+by Marktplaats web pages. It does not log in, retain cookies, fetch advertisement detail pages or call
+seller actions. Requests are at least 1.5 seconds apart and stop at a local 500-request UTC-day budget.
+This private web contract is explicitly labelled experimental because Marktplaats may change or remove
+it without notice; schema drift stops the scan safely instead of persisting ambiguous data.
 
-One search is built for each Discogs wantlist artist/title plus `vinyl`. The official search can be
-optionally narrowed by a numeric category ID, Dutch postcode and radius. Search responses are HAL
-documents; prices are converted from documented euro cents, and original ad URLs are accepted only
-from Marktplaats-owned hosts. Up to three promising ad details per target provide extra catalogue,
-format, label, year and description evidence to the shared conservative pressing resolver.
+When a Client ID and Client Secret assigned by Marktplaats are present, the service automatically uses
+the documented OAuth2 client-credentials flow, `GET /v2/search` and
+`GET /v2/advertisements/{itemId}`. The Client Secret is encrypted with Electron `safeStorage` in
+`marktplaats-credentials.json`; access tokens remain in memory. The setup UI retains the official
+business contact route and read-only call briefing as an optional route to the more stable API.
+
+One search is built for each Discogs wantlist artist/title plus `vinyl`. Prices are converted from euro
+cents and original ad URLs are accepted only from Marktplaats-owned hosts. Public results provide
+title, description and vinyl attributes to the shared conservative pressing resolver; official mode
+may additionally read up to three promising ad details per target for catalogue, label and year evidence.
+
+After each successful target search, live deals and dashboard matches are reconciled with the returned
+listing IDs. Ads that disappeared or stopped meeting the strict deal boundary are removed immediately;
+historical rare-gem events remain in state but are marked `gone`. A failed target request never performs
+this reconciliation. Fully failed batches keep the previous successful-scan timestamp and surface an
+error; partial batches are labelled incomplete.
 
 Only active ads whose price model is `fixed` are eligible. Bidding price models are ignored, and the
 adapter contains no bid, buy, chat, offer, listing or account endpoints. Search results do not expose
@@ -371,13 +389,16 @@ shipping to the buyer, so landed-cost evaluation uses the existing clearly label
 Marktplaats is EUR-only in this adapter; a non-EUR Discogs configuration is rejected rather than
 silently comparing mismatched currencies.
 
+Persisted records retain only the coarse seller city needed by the UI. Seller names, seller IDs and
+listing postcodes are removed recursively during the version-2 state migration.
+
 Background watch rotates through a small wantlist batch at the selected interval; **Scan Marktplaats
 now** checks the whole wantlist. Every conservative pressing match is available to dashboard filters,
 but only records passing the configured reference-value and discount rules enter strict deals and
 desktop alerts. Zero-result observations also feed the rare-appearance transition: when the same
-pressing later returns, it appears under Rare gems regardless of price. A local 4,000-request UTC-day
-safety budget prevents runaway full scans; this is application headroom, not a claim about a
-partner-specific Marktplaats quota. Marktplaats cloud email and Telegram delivery are not implemented.
+pressing later returns, it appears under Rare gems regardless of price. Official mode has a local
+4,000-request UTC-day budget; public-web mode uses 500. Marktplaats cloud email and Telegram delivery
+are not implemented.
 
 ## Desktop releases
 
@@ -489,6 +510,8 @@ Leave the secrets unset to keep it off (the default).
 | `EBAY_CLIENT_ID` / `EBAY_CERT_ID` | optional production eBay App ID + Cert ID for read-only 24/7 eBay email |
 | `EBAY_MARKETPLACE` / `EBAY_DELIVERY_COUNTRY` | eBay marketplace and delivery country (defaults `EBAY_NL` / `NL`) |
 | `EBAY_BATCH_SIZE` | wantlist targets per cloud eBay run (default 10, maximum 25) |
+| `TRADERA_APP_ID` / `TRADERA_APP_KEY` | optional Tradera app credentials for official read-only 24/7 Tradera email |
+| `TRADERA_BATCH_SIZE` | wantlist targets per cloud Tradera run (default 10, workflow uses 20, maximum 25) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | optional Telegram push next to email (see "Telegram push") |
 | `MODE` | `balanced` (default) / `sensitive` / `strict` |
 | `SLICE_SIZE` | releases checked per `watch-once.js` run, by watch-score priority (GitHub model, default 200) |

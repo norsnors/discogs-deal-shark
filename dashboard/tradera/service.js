@@ -152,7 +152,7 @@ function createTraderaService(options = {}) {
   let running = false;
   let nextPollAt = null;
   let lastPollAt = state.get().health.lastPollAt || null;
-  let lastError = null;
+  let lastError = state.get().health.lastError || null;
   let progress = null;
   let context = null;
   let contextLoadedAt = 0;
@@ -268,6 +268,7 @@ function createTraderaService(options = {}) {
       platform: 'tradera',
       sourceType: 'official_api',
       listingId: listing.itemId,
+      targetKey: targetIndexKey(resolved.target),
       releaseId: resolved.target.releaseId,
       releaseIds: resolved.target.releaseIds || [resolved.target.releaseId],
       artist: resolved.target.artist,
@@ -313,6 +314,7 @@ function createTraderaService(options = {}) {
     const summaries = result.items.filter((item) => fixedPriceAvailable(item) && itemAvailable(item, now()));
     runStats.auctionsRejected += result.items.length - summaries.length;
     const accepted = [];
+    const detailErrorsBefore = runStats.detailErrors;
     let detailReads = 0;
     let metadataPromise = null;
     for (const rawSummary of summaries) {
@@ -346,6 +348,34 @@ function createTraderaService(options = {}) {
         if (fresh) runStats.newDeals.push(record);
       }
     }
+    // Absence from a partial page or failed detail lookup is not evidence of disappearance.
+    const complete = Number.isFinite(result.total) && result.total === result.items.length
+      && !result.next && !(result.totalPages > 1) && !(result.errors && result.errors.length)
+      && runStats.detailErrors === detailErrorsBefore;
+    const targetKey = targetIndexKey(target);
+    const targetReleaseIds = new Set((target.releaseIds || [target.releaseId]).filter((id) => id != null).map(String));
+    const liveListingIds = new Set(accepted.map((record) => String(record.listingId)));
+    const liveDealIds = new Set(accepted.filter((record) => record.alertEligible).map((record) => String(record.listingId)));
+    const belongsToTarget = (record) => {
+      if (!record) return false;
+      if (record.targetKey) return record.targetKey === targetKey;
+      const releaseIds = record.releaseIds || [record.releaseId];
+      return releaseIds.some((id) => id != null && targetReleaseIds.has(String(id)));
+    };
+    state.update((current) => ({
+      matches: current.matches.filter((record) => !belongsToTarget(record) || !complete || liveListingIds.has(String(record.listingId))),
+      deals: current.deals.filter((record) => !belongsToTarget(record) || (!complete && !liveListingIds.has(String(record.listingId))) || liveDealIds.has(String(record.listingId))),
+      gems: current.gems.map((record) => {
+        if (!belongsToTarget(record)) return record;
+        const live = liveListingIds.has(String(record.listingId));
+        if (!live && !complete) return record;
+        return { ...record, gone: !live, current: { lowest: live ? record.lowest : null, numForSale: live ? 1 : 0, ts: now() } };
+      }),
+    }), { persist: false });
+    if (!complete && !accepted.length) {
+      runStats.listingsFound += accepted.length;
+      return;
+    }
     const availability = state.observeAvailability(targetIndexKey(target), accepted.length > 0, {
       releaseId: target.releaseId, artist: target.artist, title: target.title, year: target.year, thumb: target.thumb,
       url: searchUrl(target), itemIds: accepted.map((record) => record.listingId),
@@ -359,7 +389,7 @@ function createTraderaService(options = {}) {
   async function runOnce({ all = false } = {}) {
     if (running) return snapshot();
     running = true; lastError = null; progress = { checked: 0, total: 0, all: !!all }; publish();
-    const runStats = { checked: 0, listingsFound: 0, dealsFound: 0, gemsFound: 0, auctionsRejected: 0, titleRejected: 0, versionRejected: 0, detailErrors: 0, newDeals: [], newGems: [] };
+    const runStats = { checked: 0, targetsSucceeded: 0, targetErrors: 0, listingsFound: 0, dealsFound: 0, gemsFound: 0, auctionsRejected: 0, titleRejected: 0, versionRejected: 0, detailErrors: 0, newDeals: [], newGems: [] };
     try {
       refreshDay();
       if (callsToday >= MAX_DAILY_CALLS - 5) throw new Error('The safe Tradera daily request budget is used up. Scanning resumes tomorrow.');
@@ -369,6 +399,7 @@ function createTraderaService(options = {}) {
       const targets = ctx.index.targets;
       const current = state.get();
       const count = all ? targets.length : Math.min(settings().batchSize, targets.length);
+      let lastTargetError = null;
       progress = { checked: 0, total: count, all: !!all };
       for (let index = 0; index < count; index++) {
         if (callsToday >= MAX_DAILY_CALLS - 5) break;
@@ -376,21 +407,33 @@ function createTraderaService(options = {}) {
         const target = targets[cursor];
         progress = { ...progress, checked: index, current: `${target.artist || ''} – ${target.title || ''}` };
         publish();
-        try { await scanTarget(target, ctx.config, fx, runStats); }
+        let targetSucceeded = false;
+        try { await scanTarget(target, ctx.config, fx, runStats); targetSucceeded = true; runStats.targetsSucceeded += 1; }
         catch (error) {
           if (error && (error.status === 401 || error.status === 403 || error.status === 429)) throw error;
-          runStats.detailErrors += 1;
+          runStats.targetErrors += 1;
+          lastTargetError = error;
         }
         runStats.checked += 1;
         progress = { ...progress, checked: index + 1 };
-        const nextCursor = targets.length ? (cursor + 1) % targets.length : 0;
-        state.update({ cursor: nextCursor, health: { ...state.get().health, callDay, callsToday, lastPollAt, fx: lastFx, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
+        const health = { ...state.get().health, callDay, callsToday, lastPollAt, lastError, fx: lastFx, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } };
+        if (targetSucceeded) {
+          const nextCursor = targets.length ? (cursor + 1) % targets.length : 0;
+          state.update({ cursor: nextCursor, health });
+        } else state.update({ health });
       }
+      if (count > 0 && runStats.targetsSucceeded === 0) throw lastTargetError || new Error('Every Tradera target search failed.');
       lastPollAt = now(); progress = null;
-      state.update({ health: { ...state.get().health, callDay, callsToday, lastPollAt, fx: lastFx, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
+      if (runStats.targetErrors > 0) lastError = `${runStats.targetErrors} of ${runStats.checked} Tradera target searches failed; results are incomplete.`;
+      state.update({ health: { ...state.get().health, callDay, callsToday, lastPollAt, lastError, fx: lastFx, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
       return publish({ newDeals: runStats.newDeals, newGems: runStats.newGems, runStats: { ...runStats, newDeals: undefined, newGems: undefined } });
     } catch (error) {
-      lastError = error && error.message ? error.message : String(error); progress = null; publish(); throw error;
+      lastError = error && error.message ? error.message : String(error); progress = null;
+      state.update({ health: { ...state.get().health, callDay, callsToday, lastPollAt, lastError, fx: lastFx, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
+      // Let the cloud caller persist successful earlier targets even if a later target fails.
+      error.newDeals = runStats.newDeals;
+      error.newGems = runStats.newGems;
+      publish(); throw error;
     } finally { running = false; schedule(); publish(); }
   }
   function schedule() {
@@ -409,7 +452,7 @@ function createTraderaService(options = {}) {
     if (patch.batchSize != null) next.traderaBatchSize = clamp(patch.batchSize, 1, 25, 5);
     options.writeSettings(next); client = null; clientSignature = ''; schedule(); return snapshot();
   }
-  function resetClient() { client = null; clientSignature = ''; lastError = null; return snapshot(); }
+  function resetClient() { client = null; clientSignature = ''; lastError = null; state.update({ health: { ...state.get().health, lastError: null } }); return snapshot(); }
   return { start, stop, snapshot, runOnce, setEnabled, configure, resetClient };
 }
 
@@ -431,7 +474,10 @@ if (require.main === module && process.argv.includes('--selftest')) {
     ...summary, startDate: '2026-08-20T10:00:00Z', longDescription: 'Original pressing GO 123',
     itemAttributes: [2], shippingOptions: [{ cost: 50 }], remainingQuantity: 1,
   };
-  const service = createTraderaService({
+  let searchItems = [summary];
+  let searchError = null;
+  let searchTotal = null;
+  const serviceOptions = {
     stateFile: path.join(dir, 'state.json'), readSettings: () => settings, writeSettings: (patch) => { settings = { ...settings, ...patch }; },
     readConfig: () => config,
     loadWantlist: async () => [{ id: 1, artist: 'Macho', title: 'I’m A Man', year: 1978 }],
@@ -439,9 +485,13 @@ if (require.main === module && process.argv.includes('--selftest')) {
     loadReleaseMetadata: async () => ({ year: 1978, title: 'I’m A Man', artist: 'Macho', formats: [{ name: 'Vinyl', descriptions: ['12"', 'Original'] }], labels: [{ name: 'Goody Music', catno: 'GO 123' }] }),
     getCredentials: () => ({ appId: '1234', appKey: 'secret-key' }),
     getFxRate: async () => ({ rate: 1 / 11.2, date: '2026-08-20', source: 'ecb-daily' }),
-    clientFactory: () => ({ search: async () => ({ total: 1, items: [summary] }), getItem: async () => detail }),
+    clientFactory: () => ({
+      search: async () => { if (searchError) throw searchError; return { total: searchTotal ?? searchItems.length, items: searchItems }; },
+      getItem: async () => detail,
+    }),
     now: () => Date.parse('2026-08-20T12:00:00Z'),
-  });
+  };
+  const service = createTraderaService(serviceOptions);
   (async () => {
     const browseResult = await service.runOnce({ all: true });
     assert.strictEqual(browseResult.matches.length, 1, 'safe matches remain available to dashboard filters');
@@ -459,9 +509,54 @@ if (require.main === module && process.argv.includes('--selftest')) {
     assert.strictEqual(result.deals[0].shipping, null, 'offered shipping is not misrepresented as delivery to the configured country');
     assert.strictEqual(result.deals[0].shippingEstimate, 5);
     assert.strictEqual(result.deals[0].sourceType, 'official_api');
+    // All returned rows may be unrelated while the old match is still on a later page.
+    searchItems = Array.from({ length: 10 }, () => ({}));
+    searchTotal = 11;
+    const partial = await service.runOnce({ all: true });
+    assert.strictEqual(partial.matches.length, 1, 'partial pages preserve earlier matches');
+    assert.strictEqual(partial.deals.length, 1, 'partial pages preserve earlier deals');
+    searchItems = [summary];
+    searchTotal = null;
+    const visibleAgain = await service.runOnce({ all: true });
+    assert.strictEqual(visibleAgain.newGems.length, 0, 'pagination never creates a false restock');
+    searchItems = [];
+    const disappeared = await service.runOnce({ all: true });
+    assert.strictEqual(disappeared.deals.length, 0, 'a disappeared Tradera listing is removed from live deals immediately');
+    assert.strictEqual(disappeared.matches.length, 0, 'a disappeared Tradera listing is removed from dashboard matches immediately');
+    searchItems = [summary];
+    const relisted = await service.runOnce({ all: true });
+    assert.strictEqual(relisted.newGems.length, 1, 'zero-to-available still creates a rare-gem event');
+    searchItems = [];
+    const goneAgain = await service.runOnce({ all: true });
+    assert.strictEqual(goneAgain.gems.gems[0].gone, true, 'historical marketplace gems are retained but marked gone');
+    const lastSuccessfulPollAt = service.snapshot().status.lastPollAt;
+    searchError = Object.assign(new Error('Tradera upstream unavailable'), { status: 500 });
+    await assert.rejects(() => service.runOnce({ all: true }), /upstream unavailable/);
+    const failed = service.snapshot();
+    assert.strictEqual(failed.status.health, 'error', 'a fully failed Tradera batch is not reported as live');
+    assert.strictEqual(failed.status.lastPollAt, lastSuccessfulPollAt, 'a failed Tradera batch does not advance last successful poll time');
     assert.strictEqual(safeTraderaUrl('https://www.tradera.com/item/123', 123).startsWith('https://www.tradera.com/'), true);
     assert.strictEqual(safeTraderaUrl('https://tradera.com.evil.example/item/123', 123), 'https://www.tradera.com/item/123');
     assert.strictEqual(fixedPriceAvailable({ buyItNowPrice: null }), false, 'auction-only rows never become deals');
+    const interrupted = createTraderaService({
+      ...serviceOptions, stateFile: path.join(dir, 'interrupted.json'),
+      loadWantlist: async () => [
+        { id: 1, artist: 'Macho', title: 'I’m A Man', year: 1978 },
+        { id: 2, artist: 'Other', title: 'Record', year: 1978 },
+      ],
+      clientFactory: () => ({
+        search: async ({ query }) => {
+          if (query.includes('Other')) throw Object.assign(new Error('rate limit'), { status: 429 });
+          return { total: 1, items: [summary] };
+        },
+        getItem: async () => detail,
+      }),
+    });
+    await assert.rejects(() => interrupted.runOnce({ all: true }), error => {
+      assert.strictEqual(error.status, 429);
+      assert.strictEqual(error.newDeals.length, 1, 'a later API failure preserves earlier notifications for the outbox');
+      return true;
+    });
     console.log('tradera service selftest: OK');
   })().catch((error) => { console.error(error); process.exitCode = 1; });
 }

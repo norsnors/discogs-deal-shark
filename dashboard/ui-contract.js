@@ -38,9 +38,11 @@ const preserved = [
   'tradera-panel', 'tradera-enabled', 'tradera-scan-now', 'tradera-configure', 'tradera-poll-interval', 'tradera-health',
   'tradera-health-label', 'tradera-last-scan', 'tradera-next-scan', 'tradera-api-calls', 'tradera-status-message',
   'tradera-modal', 'tradera-app-id', 'tradera-app-key', 'tradera-test-btn', 'tradera-save', 'tradera-cancel', 'set-tradera-btn',
+  'tradera-cloud-github', 'tradera-cloud-connect',
   'marktplaats-panel', 'marktplaats-enabled', 'marktplaats-scan-now', 'marktplaats-configure', 'marktplaats-poll-interval',
   'marktplaats-health', 'marktplaats-health-label', 'marktplaats-last-scan', 'marktplaats-next-scan', 'marktplaats-api-calls',
   'marktplaats-status-message', 'marktplaats-modal', 'marktplaats-client-id', 'marktplaats-client-secret',
+  'marktplaats-access-request', 'marktplaats-copy-request', 'marktplaats-request-access',
   'marktplaats-category-id', 'marktplaats-postcode', 'marktplaats-distance', 'marktplaats-test-btn', 'marktplaats-save',
   'marktplaats-cancel', 'set-marktplaats-btn',
 ];
@@ -62,10 +64,10 @@ assert.ok(/body\.platform-marktplaats #tab-scout, body\.platform-marktplaats #ta
 for (const channel of ['vinted:snapshot', 'vinted:setEnabled', 'vinted:configure', 'vinted:scanNow', 'vinted:startBackfill', 'vinted:cancelBackfill']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Vinted IPC channel ${channel} is wired end-to-end`);
 }
-for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:test', 'ebay:snapshot', 'ebay:setEnabled', 'ebay:configure', 'ebay:scanNow']) {
+for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:test', 'ebay:snapshot', 'ebay:setEnabled', 'ebay:configure', 'ebay:scanNow', 'ebay:cloudSetup']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `eBay IPC channel ${channel} is wired end-to-end`);
 }
-for (const channel of ['tradera:credentialsStatus', 'tradera:saveCredentials', 'tradera:test', 'tradera:snapshot', 'tradera:setEnabled', 'tradera:configure', 'tradera:scanNow']) {
+for (const channel of ['tradera:credentialsStatus', 'tradera:saveCredentials', 'tradera:test', 'tradera:snapshot', 'tradera:setEnabled', 'tradera:configure', 'tradera:scanNow', 'tradera:cloudSetup']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Tradera IPC channel ${channel} is wired end-to-end`);
 }
 for (const channel of ['marktplaats:credentialsStatus', 'marktplaats:saveCredentials', 'marktplaats:test', 'marktplaats:snapshot', 'marktplaats:setEnabled', 'marktplaats:configure', 'marktplaats:scanNow']) {
@@ -75,6 +77,9 @@ for (const channel of ['scan:all', 'scan-all:update']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Unified scan IPC channel ${channel} is wired end-to-end`);
 }
 assert.ok(/function startAllScans\(/.test(renderer) && /window\.api\.scanAll\(\)/.test(renderer), 'renderer exposes one coordinated scan action');
+assert.ok(/waitForIdle/.test(main) && /waiting for current scan/.test(main), 'Scan all waits for running marketplace work instead of skipping it');
+assert.ok(/status === 'unconfigured'/.test(renderer) && /need setup/.test(renderer), 'Scan all distinguishes missing setup from completed scans');
+assert.ok(/MARKTPLAATS_ACCESS_REQUEST/.test(renderer) && /createMarktplaatsWebClient/.test(main) && /Public web fallback/.test(html), 'Marktplaats keeps optional partner onboarding while exposing the credential-free web fallback');
 assert.ok(/if \(!cfg \|\| !cfg\.hasToken \|\| !cfg\.username\) \{[\s\S]*?await setPlatform\('discogs'\);[\s\S]*?openWizard\(true\);/.test(renderer), 'first-run wizard resets a saved marketplace view to Discogs before rendering');
 assert.ok(/activePlatform === 'vinted'/.test(renderer) && /activePlatform === 'ebay'/.test(renderer) && /activePlatform === 'tradera'/.test(renderer) && /activePlatform === 'marktplaats'/.test(renderer) && /setPlatform\(activePlatform\)/.test(renderer), 'renderer keeps first-class Vinted, eBay, Tradera and Marktplaats platform state');
 assert.ok(/safeStorage\.encryptString/.test(main) && !/clientSecret: credentials\.clientSecret/.test(preload), 'eBay Cert ID stays in encrypted main-process storage');

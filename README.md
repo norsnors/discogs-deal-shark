@@ -20,8 +20,14 @@
 
 Discogs Deal Shark is a desktop companion for record collectors. It combines your Discogs
 wantlist, current marketplace listings, shipping, condition and sold-price references into a small
-daily review queue. Optional official eBay, Tradera and Marktplaats adapters add pressing-matched
-local searches. Buying always stays on the original marketplace and always remains manual.
+daily review queue. Optional official eBay and Tradera adapters plus a credential-free Marktplaats
+web fallback add pressing-matched local searches. Buying always stays on the original marketplace
+and always remains manual.
+
+> [!NOTE]
+> The marketplace adapters are currently available on `main` and are planned for the next desktop
+> release. The v1.4.0 installers below contain the Discogs Deals, Rare gems and Scout experience,
+> but not the later City Dig, eBay, Vinted, Tradera or Marktplaats integrations.
 
 ## Four ways to find records
 
@@ -70,21 +76,26 @@ requests. Results and sold medians are cached locally so later scans can reuse r
 - Tracks exact-listing price drops and relists over time.
 - Explains why a result was selected instead of showing an unexplained score.
 - Can refresh in the background while the desktop app is open.
-- Supports optional 24/7 Discogs and eBay email alerts through your own GitHub account. eBay mail
-  uses the official read-only Browse API and only sends pressing-verified matches.
+- Supports optional 24/7 Discogs, eBay and Tradera email alerts through your own GitHub account.
+  Marketplace mail uses the official read-only APIs and only sends pressing-verified matches.
 
 ## Privacy and safety
 
 - Your Discogs token is stored locally and is never exposed to the dashboard page.
 - Marketplace requests and secrets stay in Electron's isolated main process.
-- Marktplaats search uses its official OAuth2 API and requires credentials assigned by Marktplaats;
-  Deal Shark does not scrape Marktplaats pages.
+- Marktplaats works without a login through a slower, experimental public-web search fallback. It
+  sends no seller action, keeps no session cookie and drops seller identifiers and precise postcodes
+  before results enter state. Fixed-price ads only; a 500-request daily safety budget and request
+  pacing limit load. Assigned OAuth2 partner credentials automatically replace this fallback when
+  available.
 - The app never adds a record to a cart and never completes a purchase.
 - Scout changes your wantlist only after an explicit **Add to wantlist** click.
 - City Dig never loads store listings until you explicitly press **Load first 100 from every store**.
 - The optional cloud watcher runs in your own accounts and can be disabled independently.
 - eBay developer credentials are required only for eBay scans; the integration never bids, buys,
   sends offers or messages.
+- Tradera developer credentials are required only for Tradera scans; the integration uses
+  app-authenticated search and item detail only and never bids, buys or messages.
 
 ## Development
 

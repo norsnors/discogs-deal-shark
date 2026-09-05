@@ -110,9 +110,14 @@ let ebayStatus = { enabled: false, configured: false, running: false, health: 's
 let ebayRefreshBusy = false;
 let traderaStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 9500, message: null, progress: null, fx: null };
 let traderaRefreshBusy = false;
-let marktplaatsStatus = { enabled: false, configured: false, running: false, health: 'setup', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 4000, message: null, progress: null };
+let marktplaatsStatus = { enabled: false, configured: true, mode: 'public_web', degraded: true, running: false, health: 'disabled', lastPollAt: null, nextPollAt: null, callsToday: 0, dailyLimit: 500, message: null, progress: null };
 let marktplaatsRefreshBusy = false;
 const ALL_SCAN_LABELS = { discogs: 'Discogs', vinted: 'Vinted', ebay: 'eBay', tradera: 'Tradera', marktplaats: 'Marktplaats' };
+const MARKTPLAATS_ACCESS_REQUEST = `Hallo, ik wil voor een persoonlijke read-only desktopapp (Discogs Deal Shark) toegang tot de Marktplaats API v2 aanvragen.
+
+De app gebruikt uitsluitend GET /v2/search en GET /v2/advertisements/{itemId} om vasteprijs-vinyladvertenties te matchen met mijn eigen Discogs-wantlist en opent daarna de originele advertentie op Marktplaats. De app plaatst geen advertenties, biedt of koopt niet en verstuurt geen berichten. Resultaten blijven lokaal; verkopers-ID's en exacte postcodes worden niet opgeslagen of hergepubliceerd.
+
+Kunnen jullie hiervoor productie- en eventueel sandbox-clientcredentials toekennen, read-only search/detail-toegang activeren en de toepasselijke quota en voorwaarden bevestigen?`;
 let scanAllRunning = false;
 let scanAllSources = Object.fromEntries(Object.keys(ALL_SCAN_LABELS).map((source) => [source, { state: 'queued' }]));
 let scanAllCompletionTimer = null;
@@ -1584,15 +1589,17 @@ function renderMarktplaatsStatus() {
   if ([...$('marktplaats-poll-interval').options].some((option) => Number(option.value) === Number(s.pollMinutes))) $('marktplaats-poll-interval').value = String(s.pollMinutes);
   const health = $('marktplaats-health');
   health.className = 'vinted-health ' + (s.health === 'error' ? 'is-error' : (s.running ? 'is-scanning' : (s.health === 'live' ? 'is-live' : (s.configured ? 'is-idle' : 'is-paused'))));
-  $('marktplaats-health-label').textContent = s.health === 'error' ? 'Error' : (s.running ? 'Scanning' : (s.health === 'live' ? 'Live' : (s.configured ? (s.enabled ? 'Ready' : 'Connected') : 'Setup needed')));
+  const webFallback = s.mode === 'public_web';
+  $('marktplaats-health-label').textContent = s.health === 'error' ? 'Error' : (s.running ? 'Scanning' : (s.health === 'live' ? (webFallback ? 'Web live' : 'Live') : (webFallback ? (s.enabled ? 'Web ready' : 'Web fallback') : (s.enabled ? 'Ready' : 'Connected'))));
   $('marktplaats-last-scan').textContent = s.lastPollAt ? ago(s.lastPollAt) : 'Not yet';
   $('marktplaats-next-scan').textContent = s.enabled && s.nextPollAt ? until(s.nextPollAt) : '—';
   $('marktplaats-api-calls').textContent = `${Number(s.callsToday || 0).toLocaleString()} / ${Number(s.dailyLimit || 4000).toLocaleString()}`;
   const progress = s.progress && s.progress.total ? `Scanning ${s.progress.checked || 0}/${s.progress.total}${s.progress.current ? ` · ${s.progress.current}` : ''}. ` : '';
   const completed = !s.running ? marketplaceScanSummary(s.lastRunStats) : '';
-  $('marktplaats-status-message').textContent = s.error || `${progress}${s.message || (s.configured ? 'Official API v2 ready.' : 'Add API partner credentials assigned by Marktplaats.')}${completed ? ` ${completed}` : ''}`;
+  $('marktplaats-status-message').textContent = s.error || `${progress}${s.message || (webFallback ? 'Public web fallback ready; slower and less stable than the partner API.' : 'Official API v2 ready.')}${completed ? ` ${completed}` : ''}`;
   $('marktplaats-scan-now').disabled = !!s.running || !s.configured || scanAllRunning;
   $('marktplaats-enabled').disabled = !s.configured;
+  $('marktplaats-configure').textContent = webFallback ? 'Fallback settings' : 'API settings';
 }
 
 function notifyMarktplaats(items, kind = 'deal') {
@@ -1779,7 +1786,7 @@ function render() {
               : (activePlatform === 'tradera'
                   ? (traderaStatus.running ? 'The official Tradera API is scanning your wantlist.' : (traderaStatus.configured ? (marketplaceScanSummary(traderaStatus.lastRunStats) || 'No safe fixed-price Tradera pressing matches yet. Run a scan or enable background watch.') : 'Configure your Tradera App ID and App Key to start.'))
                   : (activePlatform === 'marktplaats'
-                      ? (marktplaatsStatus.running ? 'The official Marktplaats API is scanning your wantlist.' : (marktplaatsStatus.configured ? (marketplaceScanSummary(marktplaatsStatus.lastRunStats) || 'No safe fixed-price Marktplaats pressing matches yet. Run a scan or enable background watch.') : 'Configure the Client ID and Client Secret assigned by Marktplaats to start.'))
+                      ? (marktplaatsStatus.running ? (marktplaatsStatus.mode === 'public_web' ? 'The experimental Marktplaats web fallback is scanning your wantlist.' : 'The official Marktplaats API is scanning your wantlist.') : (marketplaceScanSummary(marktplaatsStatus.lastRunStats) || 'No safe fixed-price Marktplaats pressing matches yet. Run a scan or enable background watch.'))
                       : (viewMode === 'scan'
           ? (scannedOnce
               ? 'Scan finished — no confirmed VG+ copies meet your discount threshold right now.'
@@ -2041,7 +2048,7 @@ function resetAllScanSources() {
 
 function renderAllScanStatus(finalText = '') {
   const finished = new Set(['done', 'skipped', 'error']);
-  let finishedCount = 0; let runningCount = 0;
+  let finishedCount = 0; let runningCount = 0; let unavailableCount = 0;
   Object.entries(ALL_SCAN_LABELS).forEach(([source, label]) => {
     const item = scanAllSources[source] || { status: 'queued' };
     const status = item.status || item.state || 'queued';
@@ -2049,17 +2056,20 @@ function renderAllScanStatus(finalText = '') {
     chip.dataset.state = status;
     if (finished.has(status)) finishedCount += 1;
     if (status === 'running') runningCount += 1;
+    if (status === 'unconfigured') unavailableCount += 1;
     const detail = item.detail || item.reason || item.error || '';
     const stateLabel = status === 'done' ? 'done'
       : (status === 'error' ? 'failed'
-        : (status === 'skipped' ? 'skipped' : (status === 'running' ? (detail || 'scanning') : 'waiting')));
+        : (status === 'unconfigured' ? (detail || 'setup needed')
+          : (status === 'skipped' ? 'skipped' : (status === 'running' ? (detail || 'scanning') : 'waiting'))));
     chip.textContent = `${label} · ${stateLabel}`;
     chip.title = detail || stateLabel;
   });
   $('scan-all-status').classList.remove('hidden');
-  $('scan-fill').style.width = `${Math.round((finishedCount / Object.keys(ALL_SCAN_LABELS).length) * 100)}%`;
+  const availableCount = Object.keys(ALL_SCAN_LABELS).length - unavailableCount;
+  $('scan-fill').style.width = `${availableCount ? Math.round((finishedCount / availableCount) * 100) : 100}%`;
   if (finalText) $('scan-text').textContent = finalText;
-  else if (scanAllRunning) $('scan-text').textContent = `Scanning all available marketplaces · ${finishedCount}/${Object.keys(ALL_SCAN_LABELS).length} finished${runningCount ? ` · ${runningCount} active` : ''}`;
+  else if (scanAllRunning) $('scan-text').textContent = `Scanning available marketplaces · ${finishedCount}/${availableCount} finished${runningCount ? ` · ${runningCount} active` : ''}${unavailableCount ? ` · ${unavailableCount} need setup` : ''}`;
 }
 
 function onAllScanUpdate(message) {
@@ -2150,8 +2160,9 @@ async function startAllScans() {
     const states = Object.values(scanAllSources).map((item) => item.status || item.state);
     const completed = states.filter((state) => state === 'done').length;
     const skipped = states.filter((state) => state === 'skipped').length;
+    const unavailable = states.filter((state) => state === 'unconfigured').length;
     const failed = states.filter((state) => state === 'error').length;
-    finalText = `All scans finished · ${completed} completed${skipped ? ` · ${skipped} skipped` : ''}${failed ? ` · ${failed} failed` : ''}`;
+    finalText = `All available scans finished · ${completed} completed${unavailable ? ` · ${unavailable} need setup` : ''}${skipped ? ` · ${skipped} postponed` : ''}${failed ? ` · ${failed} failed` : ''}`;
   } catch (error) {
     finalText = `Scan all failed to start: ${error && error.message ? error.message : String(error)}`;
   } finally {
@@ -2458,6 +2469,7 @@ async function openTraderaSettings() {
   if (hasApi) credentials = await window.api.traderaCredentialsStatus().catch(() => ({}));
   $('tradera-app-id').value = credentials.appId || '';
   $('tradera-app-key').value = '';
+  $('tradera-cloud-github').value = '';
   $('tradera-app-key').placeholder = credentials.hasKey ? 'saved securely — leave blank to keep' : 'paste once; encrypted on save';
   if (credentials.encryptionAvailable === false) {
     result.textContent = 'Secure credential storage is unavailable; the App Key cannot be saved on this computer.';
@@ -2465,6 +2477,22 @@ async function openTraderaSettings() {
   }
   $('tradera-modal').classList.remove('hidden');
   $('tradera-app-id').focus();
+}
+async function connectTraderaCloudEmail() {
+  const result = $('tradera-test-result');
+  const githubToken = $('tradera-cloud-github').value.trim();
+  if (!githubToken) { result.textContent = 'Paste the GitHub token for your existing cloud watcher first.'; result.className = 'test-result bad'; return; }
+  $('tradera-cloud-connect').disabled = true;
+  result.textContent = 'Encrypting the saved Tradera credentials for your GitHub watcher…'; result.className = 'test-result';
+  try {
+    const response = await window.api.traderaCloudSetup({ githubToken });
+    if (!response || !response.ok) throw new Error(response && response.error || 'Could not connect Tradera cloud email.');
+    $('tradera-cloud-github').value = '';
+    result.textContent = `✓ Tradera email connected to ${response.fork}. The first cloud scan learns existing listings and sends no historical alerts.`;
+    result.className = 'test-result ok';
+  } catch (error) {
+    result.textContent = 'Failed: ' + (error && error.message ? error.message : String(error)); result.className = 'test-result bad';
+  } finally { $('tradera-cloud-connect').disabled = false; }
 }
 function closeTraderaSettings() { $('tradera-modal').classList.add('hidden'); }
 async function saveTraderaSetup(runTest = false) {
@@ -2506,6 +2534,7 @@ async function openMarktplaatsSettings() {
   }
   $('marktplaats-client-id').value = credentials.clientId || '';
   $('marktplaats-client-secret').value = '';
+  $('marktplaats-access-request').value = MARKTPLAATS_ACCESS_REQUEST;
   $('marktplaats-client-secret').placeholder = credentials.hasSecret ? 'saved securely — leave blank to keep' : 'paste once; encrypted on save';
   $('marktplaats-category-id').value = settings.marktplaatsCategoryId || '';
   $('marktplaats-postcode').value = settings.marktplaatsPostcode || '';
@@ -2516,9 +2545,26 @@ async function openMarktplaatsSettings() {
     result.className = 'test-result bad';
   }
   $('marktplaats-modal').classList.remove('hidden');
-  $('marktplaats-client-id').focus();
+  (credentials.clientId ? $('marktplaats-client-id') : $('marktplaats-category-id')).focus();
 }
 function closeMarktplaatsSettings() { $('marktplaats-modal').classList.add('hidden'); }
+async function copyMarktplaatsAccessRequest() {
+  const field = $('marktplaats-access-request');
+  const result = $('marktplaats-test-result');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(MARKTPLAATS_ACCESS_REQUEST);
+    else {
+      field.focus(); field.select();
+      if (!document.execCommand('copy')) throw new Error('Copy command was rejected');
+    }
+    result.textContent = '✓ Call briefing copied. Use it when speaking with Marktplaats Zakelijk.';
+    result.className = 'test-result ok';
+  } catch {
+    field.focus(); field.select();
+    result.textContent = 'The text is selected; press Ctrl+C to copy it.';
+    result.className = 'test-result';
+  }
+}
 function collectMarktplaatsOptions() {
   return {
     categoryId: $('marktplaats-category-id').value.trim(),
@@ -2532,20 +2578,22 @@ async function saveMarktplaatsSetup(runTest = false) {
   const clientId = $('marktplaats-client-id').value.trim();
   const clientSecret = $('marktplaats-client-secret').value.trim();
   const options = collectMarktplaatsOptions();
-  if (!clientId) { result.textContent = 'Enter the Client ID assigned by Marktplaats first.'; result.className = 'test-result bad'; return false; }
+  if (clientSecret && !clientId) { result.textContent = 'A Client Secret can only be saved together with its Client ID.'; result.className = 'test-result bad'; return false; }
   if (options.categoryId && !/^\d+$/.test(options.categoryId)) { result.textContent = 'Category ID must be numeric or blank.'; result.className = 'test-result bad'; return false; }
   if (options.postcode && !/^\d{4}[A-Z]{2}$/.test(options.postcode)) { result.textContent = 'Use a Dutch postcode such as 2011AA, or leave it blank.'; result.className = 'test-result bad'; return false; }
-  result.textContent = runTest ? 'Saving securely and testing Marktplaats…' : 'Saving securely…'; result.className = 'test-result';
+  result.textContent = runTest ? 'Saving and testing Marktplaats…' : 'Saving…'; result.className = 'test-result';
   $('marktplaats-test-btn').disabled = true; $('marktplaats-save').disabled = true;
   try {
-    await window.api.marktplaatsSaveCredentials({ clientId, clientSecret });
+    if (clientId) await window.api.marktplaatsSaveCredentials({ clientId, clientSecret });
     await window.api.marktplaatsConfigure(options);
     $('marktplaats-client-secret').value = '';
     $('marktplaats-client-secret').placeholder = 'saved securely — leave blank to keep';
     if (runTest) {
       const response = await window.api.marktplaatsTest();
       if (!response || !response.ok) throw new Error(response && response.error || 'Marktplaats connection test failed.');
-      result.textContent = `✓ Connected to Marktplaats API v2. Search returned ${Number(response.sampleItems || 0)} sample item${Number(response.sampleItems || 0) === 1 ? '' : 's'} (${Number(response.total || 0).toLocaleString()} total).`;
+      result.textContent = response.mode === 'public_web'
+        ? `✓ Public web fallback works. Search returned ${Number(response.sampleItems || 0)} sample item${Number(response.sampleItems || 0) === 1 ? '' : 's'} (${Number(response.total || 0).toLocaleString()} total).`
+        : `✓ Connected to Marktplaats API v2. Search returned ${Number(response.sampleItems || 0)} sample item${Number(response.sampleItems || 0) === 1 ? '' : 's'} (${Number(response.total || 0).toLocaleString()} total).`;
       result.className = 'test-result ok';
       await refreshMarktplaatsSnapshot();
     } else {
@@ -2736,6 +2784,7 @@ async function runCloudSetup() {
     if (r && r.ok) {
       el.textContent = `✓ Done! Your cloud watcher (${r.fork}) is live and running its first scan now. `
         + (r.ebayEmail ? 'Strict eBay email is connected too; its first run only learns existing listings. ' : '')
+        + (r.traderaEmail ? 'Strict Tradera email is connected too; its first run only learns existing listings. ' : '')
         + 'Deal emails start arriving after it has watched your wantlist for a few scans (it learns normal prices first). '
         + 'GitHub runs it roughly every 1–1.5 hours. Check your spam folder for the first email.';
       el.className = 'test-result ok';
@@ -3034,12 +3083,15 @@ window.addEventListener('DOMContentLoaded', () => {
   $('tradera-cancel').addEventListener('click', closeTraderaSettings);
   $('tradera-save').addEventListener('click', () => saveTraderaSetup(false));
   $('tradera-test-btn').addEventListener('click', () => saveTraderaSetup(true));
+  $('tradera-cloud-connect').addEventListener('click', connectTraderaCloudEmail);
   $('tradera-register-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.tradera.com/'); });
   $('tradera-api-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.tradera.com/documentation/rest-getting-started'); });
   $('set-marktplaats-btn').addEventListener('click', openMarktplaatsSettings);
   $('marktplaats-cancel').addEventListener('click', closeMarktplaatsSettings);
   $('marktplaats-save').addEventListener('click', () => saveMarktplaatsSetup(false));
   $('marktplaats-test-btn').addEventListener('click', () => saveMarktplaatsSetup(true));
+  $('marktplaats-copy-request').addEventListener('click', copyMarktplaatsAccessRequest);
+  $('marktplaats-request-access').addEventListener('click', () => openUrl('https://www.marktplaatszakelijk.nl/contact/'));
   $('marktplaats-api-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.marktplaats.nl/docs/v2/'); });
   $('marktplaats-auth-help').addEventListener('click', (event) => { event.preventDefault(); openUrl('https://api.marktplaats.nl/docs/v2/authentication.html'); });
 

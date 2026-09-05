@@ -1,5 +1,25 @@
 # Unreleased
 
+- **Optional marketplace views:** local pressing-aware scans for Vinted, official read-only eBay and
+  Tradera adapters, and an experimental credential-free Marktplaats web fallback. These are not part
+  of the v1.4.0 installers.
+- **24/7 Tradera alerts:** the existing Cloudflare-triggered GitHub workflow now runs a separate
+  read-only Tradera slice with strict pressing verification, its own cursor and retryable email
+  outbox. The first run warms state silently, so existing listings never create a historical flood.
+- **Marktplaats without partner access:** when OAuth credentials are absent, Deal Shark now uses the
+  public search service behind Marktplaats web pages with strict pacing, a 500-request daily budget,
+  fixed-price-only matching and no detail requests. Official credentials take over automatically.
+- **Live-state reconciliation:** disappeared marketplace listings are removed from current deals and
+  matches immediately, while historical rare-gem events remain visible with an explicit gone state.
+- **Honest scan health:** failed target searches no longer advance the successful-scan timestamp;
+  complete failures surface as errors and partial failures are marked as incomplete.
+- **Reliable Scan all:** background scans are awaited instead of silently skipped, while platforms
+  without credentials are identified as needing setup and no longer count as completed work.
+- **Marktplaats privacy migration:** seller identifiers and precise listing postcodes are removed from
+  persisted state; only the coarse city needed by the UI is retained.
+- **Marktplaats partner onboarding:** setup now distinguishes a regular account from assigned API
+  credentials, includes the official business contact route and a ready-to-use read-only call briefing,
+  and reports missing search permission clearly.
 - **City Dig Antwerp pilot:** interactive, zoomable world and street maps plus a nine-store
   directory, powered by locally bundled Leaflet and OpenStreetMap tiles at no API cost.
 - **Passive first step:** opening City Dig checks only inventory totals for verified sellers.

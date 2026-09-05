@@ -6,8 +6,10 @@ const os = require('os');
 const path = require('path');
 const { rareGemTransition } = require('../vinted/policy');
 
-const VERSION = 1;
-const SECRET_KEY = /^(?:raw|rawResponse|rawPayload|authorization|token|access[_-]?token|refresh[_-]?token|headers?|clientSecret|secret)$/i;
+const VERSION = 2;
+// Seller identifiers and precise postcodes are not needed for matching, alerts or rendering. Strip
+// them recursively so older version-1 state is privacy-migrated as soon as it is read and saved.
+const SECRET_KEY = /^(?:raw|rawResponse|rawPayload|authorization|token|access[_-]?token|refresh[_-]?token|headers?|clientSecret|secret|seller|sellerId|sellerName|postcode|postalCode)$/i;
 
 function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
 function sanitize(value, depth = 0) {
@@ -93,12 +95,19 @@ if (require.main === module && process.argv.includes('--selftest')) {
   const state = createMarktplaatsState(file);
   assert.strictEqual(state.markSeen('one'), true);
   assert.strictEqual(state.markSeen('one'), false);
-  state.addDeal({ id: 'marktplaats:1', rawPayload: { clientSecret: 'never' }, lowest: 10 });
+  state.addDeal({ id: 'marktplaats:1', rawPayload: { clientSecret: 'never' }, seller: 'private-seller', sellerId: 7, postcode: '2011AA', shipsFrom: 'Haarlem', lowest: 10 });
   state.addMatch({ id: 'marktplaats:2', alertEligible: false, lowest: 20 });
   state.observeAvailability('a', false);
   assert.strictEqual(state.observeAvailability('a', true).transition.isRareGem, true);
   const disk = fs.readFileSync(file, 'utf8');
   assert.ok(!disk.includes('never') && !disk.includes('clientSecret'));
+  assert.ok(!disk.includes('private-seller') && !disk.includes('2011AA') && disk.includes('Haarlem'), 'seller identifiers and precise postcodes never persist, but coarse city remains');
   assert.strictEqual(state.get().matches.length, 1);
+  const legacyFile = path.join(dir, 'legacy-state.json');
+  fs.writeFileSync(legacyFile, JSON.stringify({ version: 1, deals: [{ id: 'marktplaats:legacy', seller: 'old-seller', sellerId: 9, postcode: '1012AB', shipsFrom: 'Amsterdam' }] }));
+  const migrated = createMarktplaatsState(legacyFile);
+  migrated.save(migrated.get());
+  const migratedDisk = fs.readFileSync(legacyFile, 'utf8');
+  assert.ok(!migratedDisk.includes('old-seller') && !migratedDisk.includes('1012AB') && migratedDisk.includes('Amsterdam'), 'version-1 state is privacy-migrated on read and save');
   console.log('marktplaats state selftest: OK');
 }

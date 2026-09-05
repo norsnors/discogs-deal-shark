@@ -301,6 +301,111 @@ function renderEbayGemsEmail(gems) {
   return { subject, text, html };
 }
 
+function traderaTitle(record) {
+  return `${record.artist ? record.artist + ' – ' : ''}${record.title || record.listingTitle || 'Tradera listing'}`;
+}
+
+function traderaCostText(record) {
+  const landed = ebayLandedPrice(record);
+  const currency = record.currency || 'EUR';
+  const native = Number(record.nativeItemPrice);
+  const nativeCurrency = String(record.nativeCurrency || 'SEK').toUpperCase();
+  const nativeSuffix = Number.isFinite(native) ? ` (${nativeCurrency} ${native.toFixed(2)} on Tradera)` : '';
+  return `${fmtPrice(landed.item, currency)} fixed price${nativeSuffix} + ${fmtPrice(landed.shipping, currency)} estimated shipping = ${fmtPrice(landed.total, currency)} estimated total`;
+}
+
+// Tradera records pass the same conservative pressing resolver as eBay. Shipping remains an
+// explicit estimate because the API's cheapest offered option is not proof of delivery to NL.
+function renderTraderaDealsEmail(deals) {
+  const n = deals.length;
+  const first = deals[0];
+  const firstLanded = ebayLandedPrice(first);
+  const subject = n === 1
+    ? `💸 Tradera deal: ${traderaTitle(first)} — ${fmtPrice(firstLanded.total, first.currency)} (${pct(first.discount)} off)`
+    : `💸 ${n} Tradera deals — incl. ${traderaTitle(first)} (${pct(first.discount)} off)`;
+  const textRows = deals.map((record) => [
+    `• ${traderaTitle(record)}`,
+    `  ${traderaCostText(record)}`,
+    `  ${pct(record.discount)} under ${fmtPrice(record.reference, record.currency)} real sold median`,
+    record.itemCondition ? `  Tradera condition: ${record.itemCondition} — verify media and sleeve details on the listing` : '  Verify media and sleeve condition on the listing',
+    '  Pressing matched against Discogs release metadata',
+    `  View: ${record.url || record.listingUrl}`,
+  ].join('\n'));
+  const text = `${n} strict Tradera deal${n > 1 ? 's' : ''} matched to your Discogs wantlist:\n\n${textRows.join('\n\n')}\n`;
+  const cards = deals.map((record) => {
+    const landed = ebayLandedPrice(record);
+    const currency = record.currency || 'EUR';
+    const thumb = record.thumb
+      ? `<img src="${esc(record.thumb)}" alt="" width="64" height="64" style="border-radius:6px;object-fit:cover;margin-right:12px">` : '';
+    return `
+      <tr><td style="padding:14px 0;border-bottom:1px solid #eee">
+        <table role="presentation" width="100%"><tr>
+          <td width="64" valign="top">${thumb}</td>
+          <td valign="top">
+            <div style="font-size:16px;font-weight:600;color:#111">${esc(traderaTitle(record))}</div>
+            <div style="margin:6px 0">
+              <span style="font-size:20px;font-weight:700;color:#1a7f37">${esc(fmtPrice(landed.total, currency))}</span>
+              <span style="font-size:13px;color:#555;margin-left:8px">estimated total · ${esc(pct(record.discount))} under ${esc(fmtPrice(record.reference, currency))} sold median</span>
+            </div>
+            <div style="font-size:12px;color:#666">${esc(traderaCostText(record))}</div>
+            <div style="font-size:12px;color:#666;margin-top:4px">Pressing matched against Discogs metadata. ${esc(record.itemCondition ? `Tradera says “${record.itemCondition}”; verify media and sleeve details.` : 'Verify media and sleeve condition on the listing.')}</div>
+            <a href="${esc(record.url || record.listingUrl)}" style="display:inline-block;margin-top:10px;background:#f47b20;color:#fff;text-decoration:none;padding:8px 16px;border-radius:6px;font-size:14px;font-weight:600">View listing on Tradera →</a>
+          </td>
+        </tr></table>
+      </td></tr>`;
+  }).join('');
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:560px;margin:0 auto;color:#111">
+    <h2 style="font-size:18px;margin:0 0 4px">${n} strict Tradera deal${n > 1 ? 's' : ''}</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 12px">Official Tradera REST API · exact pressing matched to your Discogs wantlist · total uses the configured shipping estimate. Always verify condition and delivery before buying.</p>
+    <table role="presentation" width="100%">${cards}</table>
+  </div>`;
+  return { subject, text, html };
+}
+
+function renderTraderaGemsEmail(gems) {
+  const n = gems.length;
+  const first = gems[0];
+  const firstLanded = ebayLandedPrice(first);
+  const subject = n === 1
+    ? `💎 Rare Tradera find: ${traderaTitle(first)} — ${fmtPrice(firstLanded.total, first.currency)} estimated total`
+    : `💎 ${n} rare wantlist pressings appeared on Tradera`;
+  const textRows = gems.map((record) => [
+    `• ${traderaTitle(record)}`,
+    '  A verified copy appeared after the scan previously found none',
+    `  ${traderaCostText(record)} (price is not a gate for rare-find alerts)`,
+    record.reference != null ? `  Real sold median: ${fmtPrice(record.reference, record.currency)}` : null,
+    '  Verify media, sleeve condition and delivery on the listing',
+    `  View: ${record.url || record.listingUrl}`,
+  ].filter(Boolean).join('\n'));
+  const text = `${n} rare Tradera pressing${n > 1 ? 's' : ''} from your wantlist just became available:\n\n${textRows.join('\n\n')}\n`;
+  const cards = gems.map((record) => {
+    const landed = ebayLandedPrice(record);
+    const currency = record.currency || 'EUR';
+    const thumb = record.thumb
+      ? `<img src="${esc(record.thumb)}" alt="" width="64" height="64" style="border-radius:6px;object-fit:cover;margin-right:12px">` : '';
+    return `
+      <tr><td style="padding:14px 0;border-bottom:1px solid #eee">
+        <table role="presentation" width="100%"><tr>
+          <td width="64" valign="top">${thumb}</td>
+          <td valign="top">
+            <div style="font-size:16px;font-weight:600;color:#111">${esc(traderaTitle(record))}</div>
+            <div style="font-size:13px;color:#7c3aed;font-weight:600;margin:4px 0">💎 A pressing-verified copy appeared after none were found</div>
+            <div style="font-size:20px;font-weight:700;color:#111;margin:6px 0">${esc(fmtPrice(landed.total, currency))} <span style="font-size:12px;color:#888;font-weight:400">estimated total · price unfiltered</span></div>
+            <div style="font-size:12px;color:#666">${esc(traderaCostText(record))}</div>
+            <div style="font-size:12px;color:#666;margin-top:4px">Verify media, sleeve condition and delivery on the listing.</div>
+            <a href="${esc(record.url || record.listingUrl)}" style="display:inline-block;margin-top:10px;background:#7c3aed;color:#fff;text-decoration:none;padding:8px 16px;border-radius:6px;font-size:14px;font-weight:600">View listing on Tradera →</a>
+          </td>
+        </tr></table>
+      </td></tr>`;
+  }).join('');
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:560px;margin:0 auto;color:#111">
+    <h2 style="font-size:18px;margin:0 0 4px">💎 ${n} rare Tradera pressing${n > 1 ? 's' : ''} now available</h2>
+    <p style="font-size:12px;color:#888;margin:0 0 12px">The exact pressing was matched against Discogs metadata. Price is deliberately unfiltered for rare-find alerts; always verify condition and delivery.</p>
+    <table role="presentation" width="100%">${cards}</table>
+  </div>`;
+  return { subject, text, html };
+}
+
 const RESEND_DEFAULT_FROM = 'Discogs Deal Shark <onboarding@resend.dev>';
 
 // Pure: the JSON body sent to the Resend API. Exported for testing.
@@ -388,7 +493,7 @@ function makeMailer(cfg = {}) {
 
 // dealLine/recentSalesText are shared with telegram.js so both channels render identical
 // flags/labels/value-lines for a deal or gem.
-module.exports = { makeMailer, renderDealsEmail, renderGemsEmail, renderEbayDealsEmail, renderEbayGemsEmail, ebayLandedPrice, buildResendPayload, fmtPrice, dealLine, recentSalesText, fmtDateShort };
+module.exports = { makeMailer, renderDealsEmail, renderGemsEmail, renderEbayDealsEmail, renderEbayGemsEmail, renderTraderaDealsEmail, renderTraderaGemsEmail, ebayLandedPrice, buildResendPayload, fmtPrice, dealLine, recentSalesText, fmtDateShort };
 
 // --- tiny self-test (node mailer.js --selftest) ----------------------------
 if (require.main === module && process.argv.includes('--selftest')) {
@@ -471,6 +576,25 @@ if (require.main === module && process.argv.includes('--selftest')) {
   }]);
   assert.ok(/Rare eBay find: Koto – Visitors/.test(ebayGem.subject), 'eBay rare-find subject identifies the pressing');
   assert.ok(/price is not a gate/.test(ebayGem.text), 'rare-find mail explicitly keeps price unfiltered');
+
+  const tradera = renderTraderaDealsEmail([{
+    id: 'tradera:126', artist: 'Koto', title: 'Visitors', itemPrice: 18, nativeItemPrice: 200,
+    nativeCurrency: 'SEK', shipping: null, shippingEstimate: 5, currency: 'EUR', reference: 60,
+    discount: 0.616, alertEligible: true, pressingVerified: true, itemCondition: 'Used',
+    url: 'https://www.tradera.com/item/126', thumb: 'https://img.tradera.net/126.jpg',
+  }]);
+  assert.ok(/Tradera deal: Koto – Visitors/.test(tradera.subject), 'Tradera deal subject identifies the pressing');
+  assert.ok(/€18\.00 fixed price.*SEK 200\.00 on Tradera.*€5\.00 estimated shipping.*€23\.00 estimated total/.test(tradera.text), 'Tradera deal labels converted and estimated landed cost');
+  assert.ok(/real sold median/.test(tradera.text) && /Pressing matched/.test(tradera.text), 'Tradera deal explains its strict reference and match');
+  assert.ok(/View listing on Tradera/.test(tradera.html) && !/Discogs →/.test(tradera.html), 'Tradera mail links to Tradera without a Discogs buy button');
+
+  const traderaGem = renderTraderaGemsEmail([{
+    id: 'tradera-gem:127', artist: 'Macho', title: 'I’m A Man', itemPrice: 30,
+    nativeItemPrice: 335, nativeCurrency: 'SEK', shipping: null, shippingEstimate: 5,
+    currency: 'EUR', reference: 75, pressingVerified: true, url: 'https://www.tradera.com/item/127',
+  }]);
+  assert.ok(/Rare Tradera find: Macho – I’m A Man/.test(traderaGem.subject), 'Tradera rare-find subject identifies the pressing');
+  assert.ok(/price is not a gate/.test(traderaGem.text), 'Tradera rare-find mail keeps price unfiltered');
 
   // disabled mailer (no creds)
   assert.strictEqual(makeMailer({}).enabled, false);

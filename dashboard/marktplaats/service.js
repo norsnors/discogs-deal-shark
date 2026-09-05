@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createMarktplaatsClient } = require('./client');
+const { createMarktplaatsClient, createMarktplaatsWebClient } = require('./client');
 const { createMarktplaatsState } = require('./state');
 const {
   buildWantIndex,
@@ -17,6 +17,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const LIVE_TTL_MS = 7 * DAY_MS;
 // This is a local safety budget, not a claim about the partner-specific Marktplaats quota.
 const MAX_DAILY_CALLS = 4000;
+const MAX_WEB_DAILY_CALLS = 500;
 
 function clamp(value, min, max, fallback) {
   const number = Number(value);
@@ -83,16 +84,14 @@ function normalizeMarktplaatsItem(item = {}) {
     currency: String(model.currency || 'EUR').toUpperCase(),
     priceModel: String(model.modelType || '').toLowerCase(),
     condition: String(item.condition || item.itemCondition || ''),
-    seller: item.seller && (item.seller.sellerName || item.seller.name || item.seller.sellerId) || null,
-    sellerId: item.seller && item.seller.sellerId || null,
-    location: item.location && (item.location.cityName || item.location.postcode) || null,
-    postcode: item.location && item.location.postcode || null,
+    location: item.location && item.location.cityName || null,
     categoryId: item.categoryId || null,
     locale: item.locale || null,
     imageId: imageId(item),
     url: safeMarktplaatsUrl(website && website.href || item.websiteUrl || item.url || (itemId ? `https://link.marktplaats.nl/${itemId}` : '')),
     createdAt,
     attributes: item.attributes || item.attributeValues || null,
+    sourceType: item.sourceType === 'public_web' ? 'public_web' : 'official_api',
     raw: item,
   };
 }
@@ -125,6 +124,7 @@ function createMarktplaatsService(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const emit = typeof options.emit === 'function' ? options.emit : () => {};
   const clientFactory = options.clientFactory || createMarktplaatsClient;
+  const webClientFactory = options.webClientFactory || createMarktplaatsWebClient;
   const state = createMarktplaatsState(options.stateFile);
   let client = null;
   let clientSignature = '';
@@ -133,7 +133,7 @@ function createMarktplaatsService(options = {}) {
   let running = false;
   let nextPollAt = null;
   let lastPollAt = state.get().health.lastPollAt || null;
-  let lastError = null;
+  let lastError = state.get().health.lastError || null;
   let progress = null;
   let context = null;
   let contextLoadedAt = 0;
@@ -162,13 +162,22 @@ function createMarktplaatsService(options = {}) {
   }
   function ensureClient() {
     const creds = credentials();
-    const signature = JSON.stringify([creds.clientId, creds.clientSecret]);
+    const hasCredentials = !!creds.clientId && !!creds.clientSecret;
+    const mode = hasCredentials ? 'official_api' : 'public_web';
+    const signature = JSON.stringify([mode, creds.clientId, creds.clientSecret]);
     if (!client || signature !== clientSignature) {
-      client = clientFactory({ ...creds, onRequest: recordRequest });
+      client = hasCredentials
+        ? clientFactory({ ...creds, onRequest: recordRequest })
+        : webClientFactory({ onRequest: recordRequest });
       clientSignature = signature;
     }
     return client;
   }
+  function currentMode() {
+    const creds = credentials();
+    return creds.clientId && creds.clientSecret ? 'official_api' : 'public_web';
+  }
+  function dailyLimit() { return currentMode() === 'official_api' ? MAX_DAILY_CALLS : MAX_WEB_DAILY_CALLS; }
   async function loadContext(force = false) {
     const config = options.readConfig() || {};
     if (!force && context && now() - contextLoadedAt < 30 * 60 * 1000 && context.username === config.username && context.token === config.token) return context;
@@ -193,24 +202,26 @@ function createMarktplaatsService(options = {}) {
   }
   function publicStatus() {
     refreshDay();
-    const cfg = settings(); const snapshot = state.get(); const creds = credentials();
-    const hasCredentials = !!creds.clientId && !!creds.clientSecret;
+    const cfg = settings(); const snapshot = state.get(); const mode = currentMode();
     return {
       enabled: cfg.enabled,
-      configured: hasCredentials,
+      configured: true,
+      mode,
+      degraded: mode === 'public_web',
       running,
-      health: running ? 'scanning' : (lastError ? 'error' : (lastPollAt ? 'live' : (hasCredentials ? (cfg.enabled ? 'idle' : 'disabled') : 'setup'))),
+      health: running ? 'scanning' : (lastError ? 'error' : (lastPollAt ? 'live' : (cfg.enabled ? 'idle' : 'disabled'))),
       pollMinutes: cfg.pollMinutes,
       lastPollAt,
       nextPollAt: cfg.enabled ? nextPollAt : null,
       callsToday,
-      dailyLimit: MAX_DAILY_CALLS,
+      dailyLimit: dailyLimit(),
       targetCount: context && context.index ? context.index.targets.length : snapshot.wantlist.length,
       cursor: snapshot.cursor || 0,
       progress,
       lastRunStats: snapshot.health && snapshot.health.lastRunStats || null,
       error: lastError,
-      message: !hasCredentials ? 'Add Marktplaats API partner credentials to connect official search.'
+      message: mode === 'public_web'
+        ? (lastPollAt ? 'Experimental public web fallback · fixed-price listings only · lower request budget · pressing-matched against your Discogs wantlist.' : 'Public web fallback is ready without partner credentials. It is slower and may stop if Marktplaats changes the page service.')
         : (lastPollAt ? 'Official Marktplaats API · fixed-price listings · pressing-matched against your Discogs wantlist.' : 'Marktplaats API is configured and ready.'),
     };
   }
@@ -236,8 +247,9 @@ function createMarktplaatsService(options = {}) {
     return {
       id: `marktplaats:${listing.itemId}`,
       platform: 'marktplaats',
-      sourceType: 'official_api',
+      sourceType: listing.sourceType,
       listingId: listing.itemId,
+      targetKey: targetIndexKey(resolved.target),
       releaseId: resolved.target.releaseId,
       releaseIds: resolved.target.releaseIds || [resolved.target.releaseId],
       artist: resolved.target.artist,
@@ -265,14 +277,11 @@ function createMarktplaatsService(options = {}) {
       conditionConfirmed: false,
       freshListing: listing.createdAt ? now() - Date.parse(listing.createdAt) < DAY_MS : false,
       observedAt,
-      seller: listing.seller,
-      sellerId: listing.sellerId,
       categoryId: listing.categoryId,
-      postcode: listing.postcode,
       priceModel: listing.priceModel,
       url: listing.url,
       listingUrl: listing.url,
-      provenance: { source: 'marktplaats-api-v2', observedAt },
+      provenance: { source: listing.sourceType === 'public_web' ? 'marktplaats-public-web' : 'marktplaats-api-v2', observedAt },
       ts: listing.createdAt && Number.isFinite(Date.parse(listing.createdAt)) ? Date.parse(listing.createdAt) : observedAt,
     };
   }
@@ -281,6 +290,7 @@ function createMarktplaatsService(options = {}) {
     const result = await ensureClient().search({ query: queryFor(target), categoryId: cfg.categoryId, postcode: cfg.postcode, distance: cfg.distance, limit: 10 });
     const candidates = result.items.map(normalizeMarktplaatsItem).filter((listing) => listing.itemId && listing.itemPrice != null && listing.url && listing.priceModel === 'fixed' && itemAvailable(listing.raw));
     const accepted = [];
+    const detailErrorsBefore = runStats.detailErrors;
     let detailReads = 0;
     for (const summary of candidates) {
       const match = matchCatalogItem(bridgeItem(summary), { targets: [target] });
@@ -312,6 +322,34 @@ function createMarktplaatsService(options = {}) {
         if (fresh) runStats.newDeals.push(record);
       }
     }
+    // Absence from a partial page or failed detail lookup is not evidence of disappearance.
+    const complete = Number.isFinite(result.total) && result.total === result.items.length
+      && !result.next && !(result.totalPages > 1) && !(result.errors && result.errors.length)
+      && runStats.detailErrors === detailErrorsBefore;
+    const targetKey = targetIndexKey(target);
+    const targetReleaseIds = new Set((target.releaseIds || [target.releaseId]).filter((id) => id != null).map(String));
+    const liveListingIds = new Set(accepted.map((record) => String(record.listingId)));
+    const liveDealIds = new Set(accepted.filter((record) => record.alertEligible).map((record) => String(record.listingId)));
+    const belongsToTarget = (record) => {
+      if (!record) return false;
+      if (record.targetKey) return record.targetKey === targetKey;
+      const releaseIds = record.releaseIds || [record.releaseId];
+      return releaseIds.some((id) => id != null && targetReleaseIds.has(String(id)));
+    };
+    state.update((current) => ({
+      matches: current.matches.filter((record) => !belongsToTarget(record) || !complete || liveListingIds.has(String(record.listingId))),
+      deals: current.deals.filter((record) => !belongsToTarget(record) || (!complete && !liveListingIds.has(String(record.listingId))) || liveDealIds.has(String(record.listingId))),
+      gems: current.gems.map((record) => {
+        if (!belongsToTarget(record)) return record;
+        const live = liveListingIds.has(String(record.listingId));
+        if (!live && !complete) return record;
+        return { ...record, gone: !live, current: { lowest: live ? record.lowest : null, numForSale: live ? 1 : 0, ts: now() } };
+      }),
+    }), { persist: false });
+    if (!complete && !accepted.length) {
+      runStats.listingsFound += accepted.length;
+      return;
+    }
     const availability = state.observeAvailability(targetIndexKey(target), accepted.length > 0, {
       releaseId: target.releaseId, artist: target.artist, title: target.title, year: target.year, thumb: target.thumb,
       url: searchUrl(target), itemIds: accepted.map((record) => record.listingId),
@@ -325,37 +363,47 @@ function createMarktplaatsService(options = {}) {
   async function runOnce({ all = false } = {}) {
     if (running) return snapshot();
     running = true; lastError = null; progress = { checked: 0, total: 0, all: !!all }; publish();
-    const runStats = { checked: 0, listingsFound: 0, dealsFound: 0, gemsFound: 0, titleRejected: 0, versionRejected: 0, currencyRejected: 0, nonFixedRejected: 0, detailErrors: 0, newDeals: [], newGems: [] };
+    const runStats = { checked: 0, targetsSucceeded: 0, targetErrors: 0, listingsFound: 0, dealsFound: 0, gemsFound: 0, titleRejected: 0, versionRejected: 0, currencyRejected: 0, nonFixedRejected: 0, detailErrors: 0, newDeals: [], newGems: [] };
     try {
       refreshDay();
-      if (callsToday >= MAX_DAILY_CALLS - 5) throw new Error('The local Marktplaats request safety budget is used up. Scanning resumes tomorrow.');
+      if (callsToday >= dailyLimit() - 5) throw new Error('The local Marktplaats request safety budget is used up. Scanning resumes tomorrow.');
       ensureClient();
       const ctx = await loadContext(all);
       const targets = ctx.index.targets;
       const current = state.get();
       const count = all ? targets.length : Math.min(settings().batchSize, targets.length);
+      let lastTargetError = null;
       progress = { checked: 0, total: count, all: !!all };
       for (let index = 0; index < count; index++) {
-        if (callsToday >= MAX_DAILY_CALLS - 5) break;
+        if (callsToday >= dailyLimit() - 5) break;
         const cursor = all ? index : (current.cursor + index) % targets.length;
         const target = targets[cursor];
         progress = { ...progress, checked: index, current: `${target.artist || ''} – ${target.title || ''}` };
         publish();
-        try { await scanTarget(target, ctx.config, runStats); }
+        let targetSucceeded = false;
+        try { await scanTarget(target, ctx.config, runStats); targetSucceeded = true; runStats.targetsSucceeded += 1; }
         catch (error) {
           if (error && (error.status === 401 || error.status === 403 || error.status === 429)) throw error;
-          runStats.detailErrors += 1;
+          runStats.targetErrors += 1;
+          lastTargetError = error;
         }
         runStats.checked += 1;
         progress = { ...progress, checked: index + 1 };
-        const nextCursor = targets.length ? (cursor + 1) % targets.length : 0;
-        state.update({ cursor: nextCursor, health: { ...state.get().health, callDay, callsToday, lastPollAt, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
+        const health = { ...state.get().health, callDay, callsToday, lastPollAt, lastError, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } };
+        if (targetSucceeded) {
+          const nextCursor = targets.length ? (cursor + 1) % targets.length : 0;
+          state.update({ cursor: nextCursor, health });
+        } else state.update({ health });
       }
+      if (count > 0 && runStats.targetsSucceeded === 0) throw lastTargetError || new Error('Every Marktplaats target search failed.');
       lastPollAt = now(); progress = null;
-      state.update({ health: { ...state.get().health, callDay, callsToday, lastPollAt, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
+      if (runStats.targetErrors > 0) lastError = `${runStats.targetErrors} of ${runStats.checked} Marktplaats target searches failed; results are incomplete.`;
+      state.update({ health: { ...state.get().health, callDay, callsToday, lastPollAt, lastError, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
       return publish({ newDeals: runStats.newDeals, newGems: runStats.newGems, runStats: { ...runStats, newDeals: undefined, newGems: undefined } });
     } catch (error) {
-      lastError = error && error.message ? error.message : String(error); progress = null; publish(); throw error;
+      lastError = error && error.message ? error.message : String(error); progress = null;
+      state.update({ health: { ...state.get().health, callDay, callsToday, lastPollAt, lastError, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
+      publish(); throw error;
     } finally { running = false; schedule(); publish(); }
   }
   function schedule() {
@@ -377,11 +425,11 @@ function createMarktplaatsService(options = {}) {
     if (patch.distance != null) next.marktplaatsDistance = clamp(patch.distance, 1000, 500000, 100000);
     options.writeSettings(next); client = null; clientSignature = ''; schedule(); return snapshot();
   }
-  function resetClient() { client = null; clientSignature = ''; lastError = null; return snapshot(); }
+  function resetClient() { client = null; clientSignature = ''; lastError = null; state.update({ health: { ...state.get().health, lastError: null } }); return snapshot(); }
   return { start, stop, snapshot, runOnce, setEnabled, configure, resetClient };
 }
 
-module.exports = { createMarktplaatsService, normalizeMarktplaatsItem, safeMarktplaatsUrl, fixedPrice, itemAvailable, queryFor, MAX_DAILY_CALLS };
+module.exports = { createMarktplaatsService, normalizeMarktplaatsItem, safeMarktplaatsUrl, fixedPrice, itemAvailable, queryFor, MAX_DAILY_CALLS, MAX_WEB_DAILY_CALLS };
 
 if (require.main === module && process.argv.includes('--selftest')) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deal-shark-marktplaats-service-'));
@@ -393,14 +441,27 @@ if (require.main === module && process.argv.includes('--selftest')) {
     seller: { sellerId: 7, sellerName: 'vinylseller' }, location: { postcode: '2011AA', cityName: 'Haarlem' },
     _links: { 'mp:advertisement-website-link': { href: 'http://link.marktplaats.nl/m123' } },
   };
+  let searchItems = [summary];
+  let searchError = null;
+  let searchTotal = null;
+  let credentials = { clientId: 'client', clientSecret: 'secret' };
   const service = createMarktplaatsService({
     stateFile: path.join(dir, 'state.json'), readSettings: () => settings, writeSettings: (patch) => { settings = { ...settings, ...patch }; },
     readConfig: () => config,
     loadWantlist: async () => [{ id: 1, artist: 'Macho', title: 'I’m A Man', year: 1978 }],
     loadMedians: async () => ({ 1: { median: 80 } }),
     loadReleaseMetadata: async () => ({ year: 1978, title: 'I’m A Man', artist: 'Macho', formats: [{ name: 'Vinyl', descriptions: ['12"', 'Original'] }], labels: [{ name: 'Goody Music', catno: 'GO 123' }] }),
-    getCredentials: () => ({ clientId: 'client', clientSecret: 'secret' }),
-    clientFactory: () => ({ search: async () => ({ total: 1, items: [summary] }), getAdvertisement: async () => ({ ...summary, attributes: { catalogNumber: 'GO 123', format: '12 inch' } }) }),
+    getCredentials: () => credentials,
+    clientFactory: () => ({
+      mode: 'official_api',
+      search: async () => { if (searchError) throw searchError; return { total: searchTotal ?? searchItems.length, items: searchItems }; },
+      getAdvertisement: async () => ({ ...summary, attributes: { catalogNumber: 'GO 123', format: '12 inch' } }),
+    }),
+    webClientFactory: () => ({
+      mode: 'public_web',
+      search: async () => { if (searchError) throw searchError; return { total: searchTotal ?? searchItems.length, items: searchItems.map((item) => ({ ...item, sourceType: 'public_web' })) }; },
+      getAdvertisement: async () => ({ ...summary, sourceType: 'public_web', attributes: { catalogNumber: 'GO 123', format: '12 inch' } }),
+    }),
   });
   (async () => {
     const browseResult = await service.runOnce({ all: true });
@@ -417,6 +478,43 @@ if (require.main === module && process.argv.includes('--selftest')) {
     assert.strictEqual(result.deals[0].shipping, null);
     assert.strictEqual(result.deals[0].shippingEstimate, 5);
     assert.strictEqual(result.deals[0].sourceType, 'official_api');
+    // All returned rows may be unrelated while the old match is still on a later page.
+    searchItems = Array.from({ length: 10 }, () => ({}));
+    searchTotal = 11;
+    const partial = await service.runOnce({ all: true });
+    assert.strictEqual(partial.matches.length, 1, 'partial pages preserve earlier matches');
+    assert.strictEqual(partial.deals.length, 1, 'partial pages preserve earlier deals');
+    searchItems = [summary];
+    searchTotal = null;
+    const visibleAgain = await service.runOnce({ all: true });
+    assert.strictEqual(visibleAgain.newGems.length, 0, 'pagination never creates a false restock');
+    searchItems = [];
+    const disappeared = await service.runOnce({ all: true });
+    assert.strictEqual(disappeared.deals.length, 0, 'a disappeared Marktplaats listing is removed from live deals immediately');
+    assert.strictEqual(disappeared.matches.length, 0, 'a disappeared Marktplaats listing is removed from dashboard matches immediately');
+    searchItems = [summary];
+    const relisted = await service.runOnce({ all: true });
+    assert.strictEqual(relisted.newGems.length, 1, 'zero-to-available still creates a rare-gem event');
+    searchItems = [];
+    const goneAgain = await service.runOnce({ all: true });
+    assert.strictEqual(goneAgain.gems.gems[0].gone, true, 'historical marketplace gems are retained but marked gone');
+    const lastSuccessfulPollAt = service.snapshot().status.lastPollAt;
+    searchError = Object.assign(new Error('Marktplaats upstream unavailable'), { status: 500 });
+    await assert.rejects(() => service.runOnce({ all: true }), /upstream unavailable/);
+    const failed = service.snapshot();
+    assert.strictEqual(failed.status.health, 'error', 'a fully failed Marktplaats batch is not reported as live');
+    assert.strictEqual(failed.status.lastPollAt, lastSuccessfulPollAt, 'a failed Marktplaats batch does not advance last successful poll time');
+    credentials = {};
+    searchError = null;
+    searchItems = [summary];
+    service.resetClient();
+    const fallbackStatus = service.snapshot().status;
+    assert.strictEqual(fallbackStatus.configured, true, 'public fallback is usable without partner credentials');
+    assert.strictEqual(fallbackStatus.mode, 'public_web');
+    assert.strictEqual(fallbackStatus.dailyLimit, MAX_WEB_DAILY_CALLS);
+    const fallback = await service.runOnce({ all: true });
+    assert.strictEqual(fallback.matches[0].sourceType, 'public_web');
+    assert.strictEqual(fallback.matches[0].provenance.source, 'marktplaats-public-web');
     assert.ok(safeMarktplaatsUrl('http://link.marktplaats.nl/m123').startsWith('https://link.marktplaats.nl/'));
     assert.strictEqual(safeMarktplaatsUrl('https://marktplaats.nl.evil.example/m123'), null);
     assert.strictEqual(fixedPrice({ priceModel: { modelType: 'bid', askingPrice: 1000 } }), null);
