@@ -122,6 +122,6 @@
   "dependencies": {
     "leaflet": "1.9.4",
     "libsodium-wrappers": "^0.8.4",
-    "nodemailer": "^9.0.5"
+    "nodemailer": "^9.1.1"
   }
 }
