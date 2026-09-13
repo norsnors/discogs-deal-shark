@@ -14,7 +14,7 @@
     "start": "node watcher.js"
   },
   "dependencies": {
-    "nodemailer": "^9.0.5"
+    "nodemailer": "^10.0.3"
   },
   "engines": {
     "node": ">=20"
