@@ -269,6 +269,13 @@ such as `Vinyl: VG` overrides the generic Vinted label. These mappings guide pri
 the card remains `conditionConfirmed: false` because Vinted does not provide Discogs-style play
 grading. `Goed`/VG and lower conditions cannot enter the good-price tier.
 
+The Vinted transport is deliberately accountless and local. Since Vinted retired the anonymous
+`/api/v2/catalog/items` JSON endpoint in September 2026, `dashboard/vinted/client.js` reads the
+public catalogue page's server-rendered Next.js hydration payload. It never requests or stores a
+Vinted access token. The existing 403/429/challenge circuit breaker remains active. Catalogue pages
+are substantially larger than the former JSON response, so polling is clamped to a minimum of two
+minutes and backfill pauses a minute between batches.
+
 Vinted pressing confirmation treats an explicit physical size as a hard constraint. It recognizes
 7, 10 and 12 inches written with straight/typographic quotes, hyphenated `7-inch`, common Dutch,
 English, Italian, French, Spanish, German, Polish and Portuguese units, plus 17/18/25/30 cm. Size

@@ -1,8 +1,14 @@
-# Unreleased
+# Discogs Deal Shark 1.5.0
 
+- **Mailer security update:** Nodemailer is updated to the secure 10.x line in both the cloud watcher and desktop
+  package, resolving the high-severity advisories reported against the previous dependency.
+- **Vinted scan restored after the September endpoint removal:** Vinted retired the anonymous
+  `/api/v2/catalog/items` JSON route. Deal Shark now reads the public server-rendered catalogue
+  payload instead, keeps the same challenge/rate-limit circuit breaker and requires no Vinted
+  account or token. Because these pages are much larger, background polling is bounded to at least
+  two minutes and backfill pauses a minute between batches.
 - **Optional marketplace views:** local pressing-aware scans for Vinted, official read-only eBay and
-  Tradera adapters, and an experimental credential-free Marktplaats web fallback. These are not part
-  of the v1.4.0 installers.
+  Tradera adapters, and an experimental credential-free Marktplaats web fallback.
 - **24/7 Tradera alerts:** the existing Cloudflare-triggered GitHub workflow now runs a separate
   read-only Tradera slice with strict pressing verification, its own cursor and retryable email
   outbox. Each search target warms up silently before its new listings can trigger email.

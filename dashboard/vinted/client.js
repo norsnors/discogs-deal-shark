@@ -4,6 +4,9 @@ const { DEFAULT_CATEGORY_ID } = require('./policy');
 
 const DEFAULT_ORIGIN = 'https://www.vinted.nl';
 const DEFAULT_CATALOG_PATH = '/catalog/3041-vinilines-ploksteles';
+// Kept exported for compatibility with callers that inspect the legacy configuration. Vinted
+// retired this anonymous JSON route in September 2026; catalogue reads now use the public,
+// server-rendered catalogue page and its Next.js hydration payload.
 const DEFAULT_API_PATH = '/api/v2/catalog/items';
 const DEFAULT_MIN_GAP_MS = 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 1000;
@@ -88,6 +91,63 @@ function parseCatalogPayload(payload) {
     pagination,
     raw: body,
   };
+}
+
+function catalogProductItem(entry = {}) {
+  const product = entry && typeof entry === 'object'
+    ? (entry.productItem || entry.product_item || entry.item || entry)
+    : {};
+  const price = product.price && typeof product.price === 'object' ? product.price : null;
+  const photo = product.thumbnailUrl || product.thumbnail_url
+    || (Array.isArray(product.photos) && product.photos[0] && product.photos[0].url)
+    || null;
+  return {
+    ...product,
+    id: product.id ?? entry.id ?? null,
+    url: product.url || product.itemUrl || product.item_url || null,
+    currency_code: product.currencyCode || product.currency_code
+      || (price && (price.currencyCode || price.currency_code || price.currency)) || 'EUR',
+    photo,
+    status: product.status || product.itemBox?.secondLine || product.item_box?.second_line || null,
+  };
+}
+
+function parseCatalogPageHtml(html) {
+  const source = String(html || '');
+  const marker = 'self.__next_f.push(';
+  for (const match of source.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const body = String(match[1] || '').trim();
+    if (!body.startsWith(marker) || !body.includes('\\"items\\":{\\"items\\"')) continue;
+    let outer;
+    try { outer = JSON.parse(body.slice(marker.length, -1)); } catch { continue; }
+    const flight = Array.isArray(outer) && typeof outer[1] === 'string' ? outer[1] : '';
+    const separator = flight.indexOf(':');
+    if (separator < 0) continue;
+    let tree;
+    try { tree = JSON.parse(flight.slice(separator + 1).trim()); } catch { continue; }
+    let catalog = null;
+    const visit = (value) => {
+      if (catalog || !value || typeof value !== 'object') return;
+      if (value.items && Array.isArray(value.items.items) && value.items.pagination && typeof value.items.pagination === 'object') {
+        catalog = value.items;
+        return;
+      }
+      if (Array.isArray(value)) value.forEach(visit);
+      else Object.values(value).forEach(visit);
+    };
+    visit(tree);
+    if (!catalog) continue;
+    const pagination = catalog.pagination || {};
+    return {
+      found: true,
+      items: catalog.items.map(catalogProductItem),
+      total: Number(pagination.total_entries ?? pagination.total_count ?? pagination.total_items),
+      page: Number(pagination.current_page ?? pagination.page) || null,
+      perPage: Number(pagination.per_page ?? pagination.perPage) || null,
+      pagination,
+    };
+  }
+  return { found: false, items: [], total: null, page: null, perPage: null, pagination: {} };
 }
 
 function parseItemPageHtml(html) {
@@ -335,10 +395,10 @@ class VintedClient {
     return payload;
   }
 
-  // Fetch one page of the anonymous catalog. The caller should schedule broad polls and
-  // deep-hunt queries; this client only enforces sequential pacing and the safety circuit.
-  async _catalog(options = {}, retriedAuth = false) {
-    await this._bootstrap();
+  // Vinted removed the anonymous catalog JSON route. Its public catalogue page still contains the
+  // same public listing cards in the server-rendered Next.js hydration payload, so use that page
+  // directly without adding an account, OAuth flow or private credential dependency.
+  async _catalog(options = {}) {
     const page = Math.max(1, Math.min(1000, Number(options.page) || 1));
     const perPage = Math.max(1, Math.min(96, Number(options.perPage) || 96));
     const priceTo = Number(options.priceTo);
@@ -350,19 +410,23 @@ class VintedClient {
       order: options.order || 'newest_first',
       price_to: Number.isFinite(priceTo) && priceTo > 0 ? priceTo : null,
     };
-    let payload;
-    try { payload = await this._fetchJson(this._url(this.apiPath, params), 'catalog'); }
-    catch (error) {
-      // Anonymous access cookies can expire during a long-running desktop session. Refresh them
-      // once on 401; never retry challenges/rate limits and never loop indefinitely.
-      if (!retriedAuth && error && error.status === 401) {
-        this.jar.clear();
-        this.bootstrapped = false;
-        return this._catalog(options, true);
-      }
-      throw error;
-    }
-    const parsed = parseCatalogPayload(payload);
+    const pageParams = { ...params };
+    delete pageParams.catalog_ids;
+    const response = await this._fetch(this._url(this.catalogPath, pageParams), {
+      headers: { accept: 'text/html,application/xhtml+xml' },
+      referer: `${this.origin}/`,
+    });
+    if (response.status === 403 || response.status === 429) return this._handleFailure(response, 'catalog');
+    if (!response.ok) throw new VintedClientError(`Vinted catalog returned HTTP ${response.status}.`, { status: response.status });
+    let body = '';
+    try { body = await response.text(); }
+    catch (error) { throw new VintedClientError('Vinted catalog page could not be read.', { status: response.status, cause: error }); }
+    if (isChallengeText(body)) return this._pauseChallenge('catalog', response.status);
+    const parsed = parseCatalogPageHtml(body);
+    if (!parsed.found) throw new VintedClientError('Vinted catalog page did not contain listing data.', { code: 'CATALOG_FORMAT', status: response.status });
+    this.bootstrapped = true;
+    this.lastError = null;
+    this._emit();
     return { ...parsed, requested: { ...params }, fetchedAt: this.now() };
   }
 
@@ -430,6 +494,7 @@ module.exports = {
   mergeSetCookies,
   cookieHeader,
   parseCatalogPayload,
+  parseCatalogPageHtml,
   parseItemPageHtml,
 };
 
@@ -441,56 +506,69 @@ if (require.main === module && process.argv.includes('--selftest')) {
   assert.deepStrictEqual({ found: itemPage.found, name: itemPage.name, brand: itemPage.brand, color: itemPage.color }, { found: true, name: 'Air Mail', brand: 'Lombardoni', color: 'Black' });
   const jar = mergeSetCookies(new Map(), ['anon=secret; Path=/', 'second=ok; Path=/']);
   assert.strictEqual(cookieHeader(jar), 'anon=secret; second=ok');
+  const catalogPage = (items = [{ id: 1, productItem: {
+    id: 1,
+    title: 'Air Mail',
+    url: '/items/1-air-mail',
+    price: { amount: '10.00', currencyCode: 'EUR' },
+    serviceFee: { amount: '1.20', currencyCode: 'EUR' },
+    totalItemPrice: { amount: '11.20', currencyCode: 'EUR' },
+    thumbnailUrl: 'https://images1.vinted.net/example.webp',
+    itemBox: { secondLine: 'Heel goed' },
+  } }], pagination = { total_entries: items.length, current_page: 1, per_page: 96 }) => {
+    const tree = ['$', '$L1', null, { initialCatalogState: { items: { items, pagination } } }];
+    return `<html><script>self.__next_f.push(${JSON.stringify([1, `bc:${JSON.stringify(tree)}\n`])})</script></html>`;
+  };
+  const parsedCatalogPage = parseCatalogPageHtml(catalogPage());
+  assert.strictEqual(parsedCatalogPage.found, true);
+  assert.strictEqual(parsedCatalogPage.items[0].title, 'Air Mail');
+  assert.strictEqual(parsedCatalogPage.items[0].currency_code, 'EUR');
+  assert.strictEqual(parsedCatalogPage.items[0].status, 'Heel goed');
+  assert.strictEqual(parsedCatalogPage.total, 1);
+  assert.strictEqual(parseCatalogPageHtml('<html></html>').found, false);
   let calls = 0;
-  const fakeFetch = async (url) => {
+  const fakeFetch = async () => {
     calls += 1;
-    if (String(url).includes('/catalog/3041-')) {
-      return { status: 200, ok: true, headers: { getSetCookie: () => ['anon=not-logged-in; Path=/'] }, text: async () => '<html></html>' };
-    }
     return {
       status: 200,
       ok: true,
-      headers: { getSetCookie: () => [] },
-      text: async () => JSON.stringify({ items: [{ id: 1 }], pagination: { total_entries: 1, current_page: 1, per_page: 1 } }),
+      headers: { getSetCookie: () => ['anon=not-logged-in; Path=/'] },
+      text: async () => catalogPage(),
     };
   };
   (async () => {
     const client = createVintedClient({ fetchImpl: fakeFetch, minGapMs: 0 });
     const [result] = await Promise.all([client.catalog({ page: 1, perPage: 1 }), client.catalog({ page: 2, perPage: 1 })]);
-    assert.strictEqual(calls, 3, 'concurrent catalog calls share one bootstrap and execute sequentially');
+    assert.strictEqual(calls, 2, 'concurrent catalogue-page reads execute sequentially');
     assert.strictEqual(result.items.length, 1);
     assert.strictEqual(result.total, 1);
     assert.strictEqual(client.status().cookieCount, 1);
     client.close();
     assert.strictEqual(client.status().state, 'closed');
     let challengeCalls = 0;
-    const challengeClient = createVintedClient({ minGapMs: 0, fetchImpl: async (url) => {
+    const challengeClient = createVintedClient({ minGapMs: 0, fetchImpl: async () => {
       challengeCalls += 1;
-      if (String(url).includes('/catalog/3041-')) return { status: 200, ok: true, headers: { getSetCookie: () => ['anon=safe; Path=/'] }, text: async () => '<html>catalog</html>' };
       return { status: 200, ok: true, headers: { getSetCookie: () => [] }, text: async () => '<html>Verify you are human</html>' };
     } });
     await assert.rejects(challengeClient.catalog(), (error) => error && error.code === 'CHALLENGE');
-    assert.strictEqual(challengeCalls, 2);
+    assert.strictEqual(challengeCalls, 1);
     assert.strictEqual(challengeClient.status().state, 'challenged', 'HTTP 200 challenge HTML opens the safety circuit');
     let rateCalls = 0;
-    const rateClient = createVintedClient({ minGapMs: 0, fetchImpl: async (url) => {
+    const rateClient = createVintedClient({ minGapMs: 0, fetchImpl: async () => {
       rateCalls += 1;
-      if (String(url).includes('/catalog/3041-')) return { status: 200, ok: true, headers: { getSetCookie: () => ['anon=safe; Path=/'] }, text: async () => '<html>catalog</html>' };
       return { status: 429, ok: false, headers: { get: (name) => name === 'retry-after' ? '2' : null, getSetCookie: () => [] }, text: async () => '' };
     } });
     await assert.rejects(rateClient.catalog(), (error) => error && error.code === 'RATE_LIMITED' && error.retryAfterMs >= 30_000);
-    assert.strictEqual(rateCalls, 2);
+    assert.strictEqual(rateCalls, 1);
     await assert.rejects(rateClient.catalog(), (error) => error && error.code === 'COOLDOWN');
-    assert.strictEqual(rateCalls, 2, 'cooldown blocks locally without touching Vinted again');
-    let authCalls = 0;
-    const authClient = createVintedClient({ minGapMs: 0, fetchImpl: async (url) => {
-      authCalls += 1;
-      if (String(url).includes('/catalog/3041-')) return { status: 200, ok: true, headers: { getSetCookie: () => [`anon=round-${authCalls}; Path=/`] }, text: async () => '<html>catalog</html>' };
-      if (authCalls === 2) return { status: 401, ok: false, headers: { getSetCookie: () => [] }, text: async () => JSON.stringify({ code: 401 }) };
-      return { status: 200, ok: true, headers: { getSetCookie: () => [] }, text: async () => JSON.stringify({ items: [] }) };
-    } });
-    await authClient.catalog();
-    assert.strictEqual(authCalls, 4, 'an expired anonymous session is bootstrapped exactly once and retried');
+    assert.strictEqual(rateCalls, 1, 'cooldown blocks locally without touching Vinted again');
+    const formatClient = createVintedClient({ minGapMs: 0, fetchImpl: async () => ({
+      status: 200,
+      ok: true,
+      headers: { getSetCookie: () => [] },
+      text: async () => '<html>catalog without hydration</html>',
+    }) });
+    await assert.rejects(formatClient.catalog(), (error) => error && error.code === 'CATALOG_FORMAT');
     let requestStarted;
     const started = new Promise((resolve) => { requestStarted = resolve; });
     const closingClient = createVintedClient({ minGapMs: 0, fetchImpl: async (_url, request) => new Promise((_resolve, reject) => {

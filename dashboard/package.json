@@ -1,7 +1,7 @@
 {
   "name": "discogs-deal-shark-dashboard",
   "productName": "Discogs Deal Shark",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Discogs Deal Shark — hunts for underpriced vinyl, rare restocks and valuable records.",
   "author": "Discogs Deal Shark",
@@ -122,6 +122,6 @@
   "dependencies": {
     "leaflet": "1.9.4",
     "libsodium-wrappers": "^0.8.4",
-    "nodemailer": "^9.0.5"
+    "nodemailer": "^10.0.3"
   }
 }

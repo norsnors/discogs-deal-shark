@@ -100,11 +100,11 @@ const DEFAULT_SETTINGS = {
   token: '',
   autoPushMedians: true, // dev/owner only: after a scan, commit+push soldmedians.json for the cloud
   autoScanOnLaunchHours: 1, // re-scan while the app is open whenever the last scan is older than this many hours (also gates the launch scan). 0 = off
-  // Vinted is opt-in because it uses Vinted's anonymous website endpoints rather than a public API.
-  // One broad newest-first request serves the whole wantlist; targeted deep hunts run separately.
+  // Vinted is opt-in because it reads Vinted's public catalogue pages rather than a public API.
+  // Page responses are much larger than the retired JSON route, so use a conservative cadence.
   vintedEnabled: false,
-  vintedPollSeconds: 15,
-  vintedDeepHuntSeconds: 60,
+  vintedPollSeconds: 120,
+  vintedDeepHuntSeconds: 900,
   // eBay uses the official Browse API. The Cert ID is stored separately with Electron safeStorage;
   // settings contain only non-secret routing and scheduling preferences.
   ebayEnabled: false,
