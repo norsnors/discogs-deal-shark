@@ -8,13 +8,13 @@
   <a href="https://github.com/norsnors/discogs-deal-shark/releases/latest"><img src="https://img.shields.io/github/v/release/norsnors/discogs-deal-shark?style=flat-square&amp;color=06b6d4" alt="Latest release"></a>
   <a href="https://github.com/norsnors/discogs-deal-shark/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/norsnors/discogs-deal-shark/ci.yml?branch=main&amp;style=flat-square&amp;label=build" alt="Build status"></a>
   <a href="https://github.com/norsnors/discogs-deal-shark/releases"><img src="https://img.shields.io/github/downloads/norsnors/discogs-deal-shark/total?style=flat-square&amp;color=2563eb" alt="Total downloads"></a>
-  <a href="https://github.com/norsnors/discogs-deal-shark/releases/download/v1.4.0/Discogs-Deal-Shark-Setup-1.4.0.exe"><img src="https://img.shields.io/badge/Windows-x64-0078d4?style=flat-square&amp;logo=windows" alt="Windows x64"></a>
-  <a href="https://github.com/norsnors/discogs-deal-shark/releases/download/v1.4.0/Discogs-Deal-Shark-1.4.0-mac.dmg"><img src="https://img.shields.io/badge/macOS-Intel%20%2B%20Apple%20Silicon-111827?style=flat-square&amp;logo=apple" alt="macOS universal"></a>
+  <a href="https://github.com/norsnors/discogs-deal-shark/releases/download/v1.5.0/Discogs-Deal-Shark-Setup-1.5.0.exe"><img src="https://img.shields.io/badge/Windows-x64-0078d4?style=flat-square&amp;logo=windows" alt="Windows x64"></a>
+  <a href="https://github.com/norsnors/discogs-deal-shark/releases/download/v1.5.0/Discogs-Deal-Shark-1.5.0-mac.dmg"><img src="https://img.shields.io/badge/macOS-Intel%20%2B%20Apple%20Silicon-111827?style=flat-square&amp;logo=apple" alt="macOS universal"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/norsnors/discogs-deal-shark/releases/download/v1.4.0/Discogs-Deal-Shark-Setup-1.4.0.exe"><strong>Download for Windows</strong></a>
-  · <a href="https://github.com/norsnors/discogs-deal-shark/releases/download/v1.4.0/Discogs-Deal-Shark-1.4.0-mac.dmg"><strong>Download for macOS</strong></a>
+  <a href="https://github.com/norsnors/discogs-deal-shark/releases/download/v1.5.0/Discogs-Deal-Shark-Setup-1.5.0.exe"><strong>Download for Windows</strong></a>
+  · <a href="https://github.com/norsnors/discogs-deal-shark/releases/download/v1.5.0/Discogs-Deal-Shark-1.5.0-mac.dmg"><strong>Download for macOS</strong></a>
   · <a href="INSTALL.md">Install guide</a>
 </p>
 
@@ -23,11 +23,6 @@ wantlist, current marketplace listings, shipping, condition and sold-price refer
 daily review queue. Optional official eBay and Tradera adapters plus a credential-free Marktplaats
 web fallback add pressing-matched local searches. Buying always stays on the original marketplace
 and always remains manual.
-
-> [!NOTE]
-> The marketplace adapters are currently available on `main` and are planned for the next desktop
-> release. The v1.4.0 installers below contain the Discogs Deals, Rare gems and Scout experience,
-> but not the later City Dig, eBay, Vinted, Tradera or Marktplaats integrations.
 
 ## Four ways to find records
 
@@ -51,9 +46,9 @@ the complete inventory feed.
 
 | Platform | Installer | Architecture |
 |---|---|---|
-| Windows | [Discogs-Deal-Shark-Setup-1.4.0.exe](https://github.com/norsnors/discogs-deal-shark/releases/download/v1.4.0/Discogs-Deal-Shark-Setup-1.4.0.exe) | x64 |
-| macOS | [Discogs-Deal-Shark-1.4.0-mac.dmg](https://github.com/norsnors/discogs-deal-shark/releases/download/v1.4.0/Discogs-Deal-Shark-1.4.0-mac.dmg) | Universal: Intel + Apple Silicon |
-| Verification | [SHA256SUMS.txt](https://github.com/norsnors/discogs-deal-shark/releases/download/v1.4.0/SHA256SUMS.txt) | SHA-256 |
+| Windows | [Discogs-Deal-Shark-Setup-1.5.0.exe](https://github.com/norsnors/discogs-deal-shark/releases/download/v1.5.0/Discogs-Deal-Shark-Setup-1.5.0.exe) | x64 |
+| macOS | [Discogs-Deal-Shark-1.5.0-mac.dmg](https://github.com/norsnors/discogs-deal-shark/releases/download/v1.5.0/Discogs-Deal-Shark-1.5.0-mac.dmg) | Universal: Intel + Apple Silicon |
+| Verification | [SHA256SUMS.txt](https://github.com/norsnors/discogs-deal-shark/releases/download/v1.5.0/SHA256SUMS.txt) | SHA-256 |
 
 > [!IMPORTANT]
 > The installers are currently unsigned. Windows can show a SmartScreen warning and macOS needs a

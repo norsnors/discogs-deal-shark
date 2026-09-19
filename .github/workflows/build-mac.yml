@@ -8,7 +8,7 @@ on:
       release_tag:
         description: 'Existing version tag to build (must match dashboard/package.json)'
         required: true
-        default: 'v1.3.0'
+        default: 'v1.5.0'
 
 permissions:
   contents: read
