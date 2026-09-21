@@ -19,7 +19,7 @@ const CONTEXT_TTL_MS = 60 * 60 * 1000;
 const MAX_CATCHUP_PAGES = 5;
 const LIVE_DEAL_TTL_MS = 48 * 60 * 60 * 1000;
 const BACKFILL_BATCH_SIZE = 5;
-const BACKFILL_ROUND_DELAY_MS = 15 * 1000;
+const BACKFILL_ROUND_DELAY_MS = 60 * 1000;
 
 function clamp(value, min, max, fallback) {
   const number = Number(value);
@@ -36,7 +36,7 @@ function asTimestamp(value, fallback = Date.now()) {
 
 function queryUrl(target) {
   const search = encodeURIComponent(`${target.artist || ''} ${target.title || ''}`.trim());
-  return `https://www.vinted.nl/catalog?search_text=${search}&catalog_ids=3041`;
+  return `https://www.vinted.nl/catalog/3041-vinilines-ploksteles?search_text=${search}`;
 }
 
 function createVintedService(options = {}) {
@@ -91,8 +91,8 @@ function createVintedService(options = {}) {
     const source = options.readSettings() || {};
     return {
       enabled: source.vintedEnabled === true,
-      pollSeconds: clamp(source.vintedPollSeconds, 10, 300, 15),
-      deepHuntSeconds: clamp(source.vintedDeepHuntSeconds, 30, 3600, 60),
+      pollSeconds: clamp(source.vintedPollSeconds, 120, 1800, 120),
+      deepHuntSeconds: clamp(source.vintedDeepHuntSeconds, 900, 3600, 900),
     };
   }
 
@@ -714,8 +714,8 @@ function createVintedService(options = {}) {
 
   function configure(values = {}) {
     const patch = {};
-    if (values.pollSeconds != null) patch.vintedPollSeconds = clamp(values.pollSeconds, 10, 300, 15);
-    if (values.deepHuntSeconds != null) patch.vintedDeepHuntSeconds = clamp(values.deepHuntSeconds, 30, 3600, 60);
+    if (values.pollSeconds != null) patch.vintedPollSeconds = clamp(values.pollSeconds, 120, 1800, 120);
+    if (values.deepHuntSeconds != null) patch.vintedDeepHuntSeconds = clamp(values.deepHuntSeconds, 900, 3600, 900);
     options.writeSettings(patch);
     if (hasScheduledWork()) schedule(settings().pollSeconds * 1000);
     return publish();

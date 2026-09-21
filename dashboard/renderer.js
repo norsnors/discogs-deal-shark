@@ -1310,7 +1310,7 @@ function normalizeVintedSnapshot(value) {
       health: status.health || (status.enabled ? 'idle' : 'disabled'),
       lastPollAt: status.lastPollAt || null,
       nextPollAt: status.nextPollAt || null,
-      pollSeconds: Number(status.pollSeconds) || 15,
+      pollSeconds: Number(status.pollSeconds) || 120,
       targetCount: Number(status.targetCount) || 0,
       requestsLastHour: Number(status.requestsLastHour) || 0,
       message: status.message || null,
