@@ -165,6 +165,7 @@ exclusion that could kill the once-in-a-lifetime steal:
 | `dashboard/marktplaats/client.js` | paced public-web search fallback plus optional official OAuth2 API v2 client and normalization | `node dashboard/marktplaats/client.js --selftest` |
 | `dashboard/marktplaats/state.js` | local Marktplaats deal, match, availability and safety-budget state; strips secrets, seller IDs and precise postcodes | `node dashboard/marktplaats/state.js --selftest` |
 | `dashboard/marktplaats/service.js` | fixed-price wantlist searches, pressing matching, rare appearances and deal evaluation | `node dashboard/marktplaats/service.js --selftest` |
+| `dashboard/tools/migrate-legacy-credentials.js` | re-encrypts marketplace credentials from a legacy user-data profile into the current one | `node dashboard/tools/migrate-legacy-credentials.js --selftest` |
 | `mailer.js` | Gmail SMTP + HTML deal-email renderer | `node mailer.js --selftest` |
 | `server.js` | tiny token-protected read API for the dashboard | — |
 | `watcher.js` | the paced sweep loop tying it together | `node watcher.js --itest` |
@@ -246,7 +247,7 @@ and never touch the rendered page.
 ### Scan all marketplaces
 
 The primary **Scan all** action starts every available adapter together: the full Discogs wantlist,
-Vinted's newest feed plus one Deep Hunt target, and full-wantlist eBay, Tradera and Marktplaats searches. Each
+Vinted's newest feed plus a five-title Deep Hunt sweep, and full-wantlist eBay, Tradera and Marktplaats searches. Each
 source has its own progress state. A scan that is already running is awaited instead of skipped;
 if that run was already a full marketplace sweep its result is reused. Missing credentials for
 credentialed adapters are labelled **setup needed** and excluded from the progress denominator. A
@@ -268,6 +269,13 @@ candidate, and accepts a landed total at least 15% below that condition value. E
 such as `Vinyl: VG` overrides the generic Vinted label. These mappings guide price comparison only:
 the card remains `conditionConfirmed: false` because Vinted does not provide Discogs-style play
 grading. `Goed`/VG and lower conditions cannot enter the good-price tier.
+
+The Vinted transport is deliberately accountless and local. Since Vinted retired the anonymous
+`/api/v2/catalog/items` JSON endpoint in September 2026, `dashboard/vinted/client.js` reads the
+public catalogue page's server-rendered Next.js hydration payload. It never requests or stores a
+Vinted access token. The existing 403/429/challenge circuit breaker remains active. Catalogue pages
+are substantially larger than the former JSON response, so polling is clamped to a minimum of two
+minutes, a manual scan searches five wantlist titles, and backfill pauses a minute between batches.
 
 Vinted pressing confirmation treats an explicit physical size as a hard constraint. It recognizes
 7, 10 and 12 inches written with straight/typographic quotes, hyphenated `7-inch`, common Dutch,
@@ -319,6 +327,18 @@ title, format, condition and price, so the initial city load never performs one 
 per listing. Genre/style metadata already present in the shared 180-day cache is added opportunistically;
 uncached listings remain visible and are marked for later enrichment. Buying and cart actions remain
 outside the app.
+
+### Credentials and user-data profiles
+
+Electron derives the user-data folder from `productName`, so a rename (`Discogs Deal Watcher` ->
+`Discogs Deal Shark`, and the dev-mode `discogs-deal-dashboard` folder) creates a new profile.
+`main.js` adopts a legacy profile only when the new one is completely empty; once the new profile
+holds any marker file, credentials saved earlier are stranded. They cannot be copied either:
+`safeStorage` on Windows writes Chromium OSCrypt `v10` envelopes keyed to that profile's own
+`Local State`. `dashboard/tools/migrate-legacy-credentials.js` unwraps the source key via DPAPI,
+decrypts, re-encrypts under the destination key and writes the result, and carries across any
+marketplace settings the destination profile is missing. It reports by default and writes only with
+`--apply`; plaintext secrets are held in memory and never printed.
 
 ### eBay (official Browse API)
 
@@ -412,7 +432,11 @@ Persisted records retain only the coarse seller city needed by the UI. Seller na
 listing postcodes are removed recursively during the version-2 state migration.
 
 Background watch rotates through a small wantlist batch at the selected interval; **Scan Marktplaats
-now** checks the whole wantlist. Every conservative pressing match is available to dashboard filters,
+now** checks the whole wantlist. Targets are ordered out-of-print first, then by sold median, so a
+budget that runs out costs the cheapest titles. A background batch splits between two lanes with
+disjoint ranges and separate cursors: roughly 40% of it rotates through the high-value head (the top
+quarter of the wantlist, at least 25 titles) and the rest sweeps the tail, so the small public-web
+budget reaches the expensive pressings daily without starving the rest. Every conservative pressing match is available to dashboard filters,
 but only records passing the configured reference-value and discount rules enter strict deals and
 desktop alerts. Zero-result observations also feed the rare-appearance transition: when the same
 pressing later returns, it appears under Rare gems regardless of price. Official mode has a local

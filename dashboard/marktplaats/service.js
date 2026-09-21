@@ -18,6 +18,58 @@ const LIVE_TTL_MS = 7 * DAY_MS;
 // This is a local safety budget, not a claim about the partner-specific Marktplaats quota.
 const MAX_DAILY_CALLS = 4000;
 const MAX_WEB_DAILY_CALLS = 500;
+// The public fallback affords roughly 500 searches a day against a wantlist that is far larger, so
+// a plain round-robin cursor leaves the valuable half of the list unchecked for days at a time.
+// Targets are ordered by worth, and every batch reserves part of itself for that head while the
+// remainder keeps rotating, so the expensive records are covered daily without starving the rest.
+const PRIORITY_HEAD_RATIO = 0.25;
+const PRIORITY_BATCH_RATIO = 0.4;
+const MIN_PRIORITY_HEAD = 25;
+
+function targetWorth(target) {
+  const median = Number(target && target.median);
+  return Number.isFinite(median) && median > 0 ? median : 0;
+}
+function orderedTargets(targets) {
+  return (Array.isArray(targets) ? targets.slice() : []).sort((a, b) => Number(!!b.discogsRare) - Number(!!a.discogsRare)
+    || targetWorth(b) - targetWorth(a)
+    || targetIndexKey(a).localeCompare(targetIndexKey(b)));
+}
+function priorityHeadSize(total) {
+  if (!(total > 0)) return 0;
+  return Math.min(total, Math.max(MIN_PRIORITY_HEAD, Math.ceil(total * PRIORITY_HEAD_RATIO)));
+}
+// Pure so the two-lane schedule stays regression-testable outside Electron. The lanes cover
+// disjoint ranges — priority owns the worth-ordered head, rotation owns the tail — so no batch
+// ever spends two of its scarce requests on the same target. Returns the positions to scan, each
+// tagged with the cursor it advances on success.
+function planTargets({ total = 0, cursor = 0, priorityCursor = 0, count = 0 } = {}) {
+  const size = Math.max(0, Math.trunc(Number(total) || 0));
+  const wanted = Math.min(size, Math.max(0, Math.trunc(Number(count) || 0)));
+  if (!wanted) return [];
+  const head = priorityHeadSize(size);
+  const tail = size - head;
+  const at = (value, span, offset = 0) => offset + ((((Math.trunc(Number(value) || 0) - offset) % span) + span) % span);
+  const plan = [];
+  const used = new Set();
+  const sweep = (start, span, offset, lane, take) => {
+    let pointer = at(start, span, offset);
+    for (let step = 0; step < take && plan.length < wanted; step++) {
+      if (!used.has(pointer)) { used.add(pointer); plan.push({ index: pointer, lane }); }
+      pointer = offset + ((pointer - offset + 1) % span);
+    }
+  };
+  // A one-target batch has nothing to split, and a wantlist small enough to be all head needs no
+  // second lane; both degrade to a single rotation over everything so nothing is ever starved.
+  if (wanted === 1 || tail <= 0) {
+    sweep(cursor, size, 0, 'rotation', wanted);
+    return plan;
+  }
+  const priorityCount = Math.min(wanted - 1, Math.max(1, Math.round(wanted * PRIORITY_BATCH_RATIO)));
+  sweep(priorityCursor, head, 0, 'priority', priorityCount);
+  sweep(cursor, tail, head, 'rotation', wanted - plan.length);
+  return plan;
+}
 
 function clamp(value, min, max, fallback) {
   const number = Number(value);
@@ -182,12 +234,23 @@ function createMarktplaatsService(options = {}) {
     const config = options.readConfig() || {};
     if (!force && context && now() - contextLoadedAt < 30 * 60 * 1000 && context.username === config.username && context.token === config.token) return context;
     if (!config.username || !config.token) throw new Error('Add your Discogs username and token first; Marktplaats matching uses that wantlist.');
-    const [wantlist, medians] = await Promise.all([options.loadWantlist(config), options.loadMedians()]);
+    const [wantlist, medians, rareTargets] = await Promise.all([
+      options.loadWantlist(config),
+      options.loadMedians(),
+      typeof options.loadRareTargets === 'function' ? options.loadRareTargets() : [],
+    ]);
     const index = buildWantIndex(wantlist, medians || {});
+    const rareIds = new Set((Array.isArray(rareTargets) ? rareTargets : []).map(String));
+    // Worth-first ordering is applied once, here, so the persisted cursors, the batch plan and the
+    // wantlist the renderer shows all agree on the same sequence.
+    index.targets = orderedTargets(index.targets.map((target) => ({
+      ...target,
+      discogsRare: (target.releaseIds || [target.releaseId]).some((id) => rareIds.has(String(id))),
+    })));
     if (!index.targets.length) throw new Error('Your Discogs wantlist is empty.');
     context = { config, username: config.username, token: config.token, index };
     contextLoadedAt = now();
-    state.update({ wantlist: index.targets.map((target) => ({ releaseId: target.releaseId, releaseIds: target.releaseIds, artist: target.artist, title: target.title, year: target.year, thumb: target.thumb, median: target.median })) });
+    state.update({ wantlist: index.targets.map((target) => ({ releaseId: target.releaseId, releaseIds: target.releaseIds, artist: target.artist, title: target.title, year: target.year, thumb: target.thumb, median: target.median, discogsRare: target.discogsRare })) });
     return context;
   }
   function searchUrl(target) {
@@ -363,7 +426,7 @@ function createMarktplaatsService(options = {}) {
   async function runOnce({ all = false } = {}) {
     if (running) return snapshot();
     running = true; lastError = null; progress = { checked: 0, total: 0, all: !!all }; publish();
-    const runStats = { checked: 0, targetsSucceeded: 0, targetErrors: 0, listingsFound: 0, dealsFound: 0, gemsFound: 0, titleRejected: 0, versionRejected: 0, currencyRejected: 0, nonFixedRejected: 0, detailErrors: 0, newDeals: [], newGems: [] };
+    const runStats = { checked: 0, targetsSucceeded: 0, prioritySucceeded: 0, targetErrors: 0, listingsFound: 0, dealsFound: 0, gemsFound: 0, titleRejected: 0, versionRejected: 0, currencyRejected: 0, nonFixedRejected: 0, detailErrors: 0, newDeals: [], newGems: [] };
     try {
       refreshDay();
       if (callsToday >= dailyLimit() - 5) throw new Error('The local Marktplaats request safety budget is used up. Scanning resumes tomorrow.');
@@ -372,13 +435,19 @@ function createMarktplaatsService(options = {}) {
       const targets = ctx.index.targets;
       const current = state.get();
       const count = all ? targets.length : Math.min(settings().batchSize, targets.length);
+      // A full scan walks the worth-ordered list from the top, so the daily budget running out
+      // costs the cheapest targets. A batch splits between the high-value head and the rotation.
+      const plan = all
+        ? targets.map((_target, index) => ({ index, lane: 'rotation' }))
+        : planTargets({ total: targets.length, cursor: current.cursor, priorityCursor: current.priorityCursor, count });
+      const head = priorityHeadSize(targets.length);
       let lastTargetError = null;
-      progress = { checked: 0, total: count, all: !!all };
-      for (let index = 0; index < count; index++) {
+      progress = { checked: 0, total: plan.length, all: !!all };
+      for (let step = 0; step < plan.length; step++) {
         if (callsToday >= dailyLimit() - 5) break;
-        const cursor = all ? index : (current.cursor + index) % targets.length;
+        const { index: cursor, lane } = plan[step];
         const target = targets[cursor];
-        progress = { ...progress, checked: index, current: `${target.artist || ''} – ${target.title || ''}` };
+        progress = { ...progress, checked: step, current: `${target.artist || ''} – ${target.title || ''}` };
         publish();
         let targetSucceeded = false;
         try { await scanTarget(target, ctx.config, runStats); targetSucceeded = true; runStats.targetsSucceeded += 1; }
@@ -388,14 +457,22 @@ function createMarktplaatsService(options = {}) {
           lastTargetError = error;
         }
         runStats.checked += 1;
-        progress = { ...progress, checked: index + 1 };
+        if (targetSucceeded && lane === 'priority') runStats.prioritySucceeded += 1;
+        progress = { ...progress, checked: step + 1 };
         const health = { ...state.get().health, callDay, callsToday, lastPollAt, lastError, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } };
         if (targetSucceeded) {
-          const nextCursor = targets.length ? (cursor + 1) % targets.length : 0;
-          state.update({ cursor: nextCursor, health });
+          // Each lane owns its own cursor so the head keeps rotating independently of the sweep,
+          // and the rotation wraps back to the start of the tail rather than to the head.
+          const singleRotation = all || count === 1 || head >= targets.length;
+          const patch = singleRotation
+            ? { cursor: (cursor + 1) % targets.length }
+            : lane === 'priority' && head > 0
+            ? { priorityCursor: (cursor + 1) % head }
+            : { cursor: cursor + 1 >= targets.length ? Math.min(head, Math.max(0, targets.length - 1)) : cursor + 1 };
+          state.update({ ...patch, health });
         } else state.update({ health });
       }
-      if (count > 0 && runStats.targetsSucceeded === 0) throw lastTargetError || new Error('Every Marktplaats target search failed.');
+      if (plan.length > 0 && runStats.targetsSucceeded === 0) throw lastTargetError || new Error('Every Marktplaats target search failed.');
       lastPollAt = now(); progress = null;
       if (runStats.targetErrors > 0) lastError = `${runStats.targetErrors} of ${runStats.checked} Marktplaats target searches failed; results are incomplete.`;
       state.update({ health: { ...state.get().health, callDay, callsToday, lastPollAt, lastError, lastRunStats: { ...runStats, newDeals: undefined, newGems: undefined } } });
@@ -429,7 +506,11 @@ function createMarktplaatsService(options = {}) {
   return { start, stop, snapshot, runOnce, setEnabled, configure, resetClient };
 }
 
-module.exports = { createMarktplaatsService, normalizeMarktplaatsItem, safeMarktplaatsUrl, fixedPrice, itemAvailable, queryFor, MAX_DAILY_CALLS, MAX_WEB_DAILY_CALLS };
+module.exports = {
+  createMarktplaatsService, normalizeMarktplaatsItem, safeMarktplaatsUrl, fixedPrice, itemAvailable, queryFor,
+  orderedTargets, priorityHeadSize, planTargets,
+  MAX_DAILY_CALLS, MAX_WEB_DAILY_CALLS, PRIORITY_HEAD_RATIO, PRIORITY_BATCH_RATIO, MIN_PRIORITY_HEAD,
+};
 
 if (require.main === module && process.argv.includes('--selftest')) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deal-shark-marktplaats-service-'));
@@ -518,6 +599,124 @@ if (require.main === module && process.argv.includes('--selftest')) {
     assert.ok(safeMarktplaatsUrl('http://link.marktplaats.nl/m123').startsWith('https://link.marktplaats.nl/'));
     assert.strictEqual(safeMarktplaatsUrl('https://marktplaats.nl.evil.example/m123'), null);
     assert.strictEqual(fixedPrice({ priceModel: { modelType: 'bid', askingPrice: 1000 } }), null);
+    // Worth-first ordering plus the reserved priority lane: the small public-fallback budget must
+    // reach the expensive records every day instead of crawling the list in wantlist order.
+    const worthTargets = orderedTargets([
+      { releaseId: 1, artist: 'C', title: 'cheap', median: 5 },
+      { releaseId: 2, artist: 'B', title: 'pricey', median: 400 },
+      { releaseId: 3, artist: 'A', title: 'gone', median: 20, discogsRare: true },
+      { releaseId: 4, artist: 'D', title: 'unknown' },
+    ]);
+    assert.deepStrictEqual(worthTargets.map((target) => target.releaseId), [3, 2, 1, 4], 'out-of-print targets lead, then the highest sold medians, then unpriced titles');
+
+    const total = 817;
+    const head = priorityHeadSize(total);
+    assert.strictEqual(head, Math.ceil(total * PRIORITY_HEAD_RATIO));
+    assert.strictEqual(priorityHeadSize(10), 10, 'a wantlist smaller than the minimum head is entirely priority');
+    assert.strictEqual(priorityHeadSize(0), 0);
+
+    const batch = planTargets({ total, cursor: 600, priorityCursor: 0, count: 5 });
+    assert.strictEqual(batch.length, 5);
+    assert.deepStrictEqual(batch.filter((entry) => entry.lane === 'priority').map((entry) => entry.index), [0, 1], 'every batch reserves part of itself for the high-value head');
+    assert.deepStrictEqual(batch.filter((entry) => entry.lane === 'rotation').map((entry) => entry.index), [600, 601, 602], 'the rest keeps sweeping the tail so cheap targets are not starved');
+    assert.strictEqual(new Set(batch.map((entry) => entry.index)).size, batch.length, 'a batch never scans the same target twice');
+    assert.ok(planTargets({ total, cursor: 0, priorityCursor: 0, count: 5 })
+      .filter((entry) => entry.lane === 'rotation').every((entry) => entry.index >= head), 'a rotation cursor left inside the head is normalised into the tail');
+    assert.deepStrictEqual(planTargets({ total, cursor: total - 1, priorityCursor: 0, count: 3 })
+      .filter((entry) => entry.lane === 'rotation').map((entry) => entry.index), [total - 1, head], 'the rotation wraps to the start of the tail, never back into the head');
+    assert.deepStrictEqual(planTargets({ total, cursor: 600, priorityCursor: 0, count: 1 }), [{ index: 600, lane: 'rotation' }], 'a one-target batch has nothing to split');
+
+    let priorityCursor = 0;
+    const seenPriority = new Set();
+    for (let run = 0; run < head; run++) {
+      const planned = planTargets({ total, cursor: 0, priorityCursor, count: 5 });
+      for (const entry of planned.filter((item) => item.lane === 'priority')) {
+        seenPriority.add(entry.index);
+        priorityCursor = (entry.index + 1) % head;
+      }
+    }
+    assert.strictEqual(seenPriority.size, head, 'the priority cursor covers the whole high-value head well inside a day of batches');
+
+    const small = planTargets({ total: 6, cursor: 5, priorityCursor: 0, count: 4 });
+    assert.strictEqual(small.length, 4);
+    assert.ok(small.every((entry) => entry.lane === 'rotation'), 'a wantlist smaller than the minimum head is one single lane');
+    assert.strictEqual(new Set(small.map((entry) => entry.index)).size, 4, 'a batch never repeats a target');
+    assert.deepStrictEqual(planTargets({ total: 3, cursor: 0, priorityCursor: 0, count: 9 }).map((entry) => entry.index).sort(), [0, 1, 2], 'a batch larger than the wantlist stops at one pass');
+    assert.deepStrictEqual(planTargets({ total: 0, cursor: 0, priorityCursor: 0, count: 5 }), []);
+    assert.deepStrictEqual(planTargets({ total: 10, cursor: 0, priorityCursor: 0, count: 0 }), []);
+    assert.ok(planTargets({ total: 10, cursor: 0, priorityCursor: 0, count: 3 }).every((entry) => entry.lane === 'rotation'), 'an all-priority wantlist needs no separate lane');
+    // Full coverage: neither lane may strand a target, whatever the cursors start at.
+    let coverCursor = 7; let coverPriority = 3; const covered = new Set();
+    for (let run = 0; run < 400; run++) {
+      for (const entry of planTargets({ total, cursor: coverCursor, priorityCursor: coverPriority, count: 5 })) {
+        covered.add(entry.index);
+        if (entry.lane === 'priority') coverPriority = (entry.index + 1) % head;
+        else coverCursor = entry.index + 1 >= total ? head : entry.index + 1;
+      }
+    }
+    assert.strictEqual(covered.size, total, 'every target is eventually reached by one of the two lanes');
+
+    // End to end: a scheduled batch must actually walk both lanes and advance both cursors.
+    const batchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deal-shark-marktplaats-batch-'));
+    const batchSize = 5;
+    const batchWants = Array.from({ length: 200 }, (_unused, index) => ({
+      id: 100 + index, artist: `Artist${index + 1}`, title: `Title${index + 1}`, year: 1980,
+    }));
+    // Deliberately cheapest-first, so a run that respects wantlist order would never reach the top.
+    const batchMedians = Object.fromEntries(batchWants.map((want, index) => [want.id, { median: index + 1 }]));
+    const searched = [];
+    const batchService = createMarktplaatsService({
+      stateFile: path.join(batchDir, 'state.json'),
+      readSettings: () => ({ marktplaatsEnabled: false, marktplaatsPollMinutes: 30, marktplaatsBatchSize: batchSize }),
+      writeSettings: () => {},
+      readConfig: () => ({ username: 'tester', token: 'discogs', currency: 'EUR', minDiscount: 0.5, minReference: 100, shippingEstimate: 5 }),
+      loadWantlist: async () => batchWants,
+      loadMedians: async () => batchMedians,
+      loadRareTargets: async () => ['150'],
+      loadReleaseMetadata: async () => ({ formats: [{ name: 'Vinyl', descriptions: ['12"'] }], labels: [] }),
+      getCredentials: () => ({}),
+      webClientFactory: () => ({
+        mode: 'public_web',
+        search: async (input) => { searched.push(String(input.query)); return { total: 0, items: [] }; },
+        getAdvertisement: async () => ({}),
+      }),
+    });
+    const firstBatch = await batchService.runOnce();
+    assert.strictEqual(searched.length, batchSize, 'a scheduled run stays inside the configured batch size');
+    assert.ok(searched[0].includes('Artist51'), 'the out-of-print target leads the worth-ordered list and is hunted first');
+    assert.ok(searched[1].includes('Artist200'), 'the priority lane then takes the highest sold medians, not the wantlist order');
+    assert.strictEqual(firstBatch.status.lastRunStats.prioritySucceeded, 2);
+    assert.ok(searched.slice(2).every((query) => !query.includes('Artist200')), 'the rotation lane starts past the priority head instead of duplicating it');
+    const afterFirst = JSON.parse(fs.readFileSync(path.join(batchDir, 'state.json'), 'utf8'));
+    assert.ok(afterFirst.priorityCursor > 0 && afterFirst.cursor > 0, 'both lanes persist their own resume point');
+    await batchService.runOnce();
+    assert.strictEqual(searched.length, batchSize * 2);
+    assert.strictEqual(new Set(searched).size, batchSize * 2, 'consecutive batches never re-search the same target');
+    batchService.stop();
+
+    // Exercise persisted cursors through two complete single-target rotations, including
+    // both an all-head list and a list with a separate priority head and tail.
+    for (const size of [3, 30]) {
+      const rotationQueries = [];
+      const rotationService = createMarktplaatsService({
+        stateFile: path.join(batchDir, 'rotation-' + size + '.json'),
+        readSettings: () => ({ marktplaatsEnabled: false, marktplaatsBatchSize: 1 }),
+        writeSettings: () => {},
+        readConfig: () => ({ username: 'tester', token: 'dummy' }),
+        loadWantlist: async () => Array.from({ length: size }, (_, id) => ({ id: id + 1, artist: 'Artist' + id, title: 'Title' + id })),
+        loadMedians: async () => ({}),
+        loadReleaseMetadata: async () => ({}),
+        getCredentials: () => ({}),
+        webClientFactory: () => ({ mode: 'public_web',
+          search: async ({ query }) => { rotationQueries.push(query); return { total: 0, items: [] }; },
+          getAdvertisement: async () => ({}),
+        }),
+      });
+      for (let run = 0; run < size * 2; run++) await rotationService.runOnce();
+      assert.strictEqual(new Set(rotationQueries.slice(0, size)).size, size);
+      assert.deepStrictEqual(rotationQueries.slice(size), rotationQueries.slice(0, size), 'single-target batches repeat the whole wantlist after wrapping');
+      rotationService.stop();
+    }
     console.log('marktplaats service selftest: OK');
   })().catch((error) => { console.error(error); process.exitCode = 1; });
 }

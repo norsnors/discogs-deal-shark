@@ -19,7 +19,15 @@ const CONTEXT_TTL_MS = 60 * 60 * 1000;
 const MAX_CATCHUP_PAGES = 5;
 const LIVE_DEAL_TTL_MS = 48 * 60 * 60 * 1000;
 const BACKFILL_BATCH_SIZE = 5;
-const BACKFILL_ROUND_DELAY_MS = 15 * 1000;
+const BACKFILL_ROUND_DELAY_MS = 60 * 1000;
+// A scheduled sniper cycle hunts one wantlist title, because the newest feed is the part that has
+// to stay fresh. An explicit manual scan has no such deadline, so it sweeps a slice of the wantlist
+// instead: one title per press of the button made a manual scan effectively useless on a large
+// wantlist, which is what the existing-offer backfill had to compensate for.
+// The current public catalogue transport returns a full server-rendered page rather than the old
+// compact JSON response. Keep explicit scans useful, but bound each press to one backfill-sized
+// batch so it cannot download dozens of multi-megabyte pages in one run.
+const MANUAL_DEEP_HUNT_TARGETS = 5;
 
 function clamp(value, min, max, fallback) {
   const number = Number(value);
@@ -36,7 +44,7 @@ function asTimestamp(value, fallback = Date.now()) {
 
 function queryUrl(target) {
   const search = encodeURIComponent(`${target.artist || ''} ${target.title || ''}`.trim());
-  return `https://www.vinted.nl/catalog?search_text=${search}&catalog_ids=3041`;
+  return `https://www.vinted.nl/catalog/3041-vinilines-ploksteles?search_text=${search}`;
 }
 
 function createVintedService(options = {}) {
@@ -91,8 +99,8 @@ function createVintedService(options = {}) {
     const source = options.readSettings() || {};
     return {
       enabled: source.vintedEnabled === true,
-      pollSeconds: clamp(source.vintedPollSeconds, 10, 300, 15),
-      deepHuntSeconds: clamp(source.vintedDeepHuntSeconds, 30, 3600, 60),
+      pollSeconds: clamp(source.vintedPollSeconds, 120, 1800, 120),
+      deepHuntSeconds: clamp(source.vintedDeepHuntSeconds, 30, 7200, 900),
     };
   }
 
@@ -150,6 +158,9 @@ function createVintedService(options = {}) {
     const rejected = lastRunStats && Number(lastRunStats.versionRejected) > 0
       ? ` · ${lastRunStats.versionRejected} unverified version${lastRunStats.versionRejected === 1 ? '' : 's'} ignored`
       : '';
+    const swept = lastRunStats && Number(lastRunStats.deepTargetsChecked) > 0
+      ? ` · ${lastRunStats.deepTargetsChecked} title${lastRunStats.deepTargetsChecked === 1 ? '' : 's'} searched directly`
+      : '';
     return {
       enabled: cfg.enabled,
       running,
@@ -170,7 +181,7 @@ function createVintedService(options = {}) {
         : (backfill.active
             ? `Existing-offer backfill · ${backfill.checked}/${backfill.total || targetCount || '?'} titles checked · ${backfill.listingsFound} compatible listings found.`
         : (!cfg.enabled && lastPollAt
-            ? `Manual scan complete · ${targetCount || 0} pressing-aware wantlist targets${coverage}${rejected} · background sniper is off.`
+            ? `Manual scan complete · ${targetCount || 0} pressing-aware wantlist targets${coverage}${swept}${rejected} · background sniper is off.`
             : (lastPollAt ? `Newest feed active · ${targetCount || 0} pressing-aware wantlist targets${coverage}${rejected}.` : null))),
       error: lastError,
     };
@@ -495,17 +506,37 @@ function createVintedService(options = {}) {
     return { ...processed, target: targetIndexKey(target), found: compatible.length, titleMatches: matches.length };
   }
 
-  async function deepHunt(ctx) {
+  async function deepHunt(ctx, count = 1, onResult = () => {}) {
     const targets = orderedTargets(ctx);
-    const current = state.get();
-    const cursor = Number(current.health && current.health.deepHuntCursor) || 0;
-    const result = await huntTarget(ctx, targets[cursor % targets.length]);
-    const health = state.get().health || {};
-    state.update({ health: { ...health, deepHuntCursor: (cursor + 1) % targets.length, lastDeepHuntAt } });
-    return result;
+    if (!targets.length) return null;
+    const requested = Math.max(1, Math.min(Number(count) || 1, targets.length));
+    const output = {
+      newDeals: [], newGems: [], inspected: 0, titleMatches: 0, versionRejected: 0, reissueRejected: 0,
+      found: 0, target: null, targetsChecked: 0,
+    };
+    for (let round = 0; round < requested; round++) {
+      const cursor = Number(state.get().health && state.get().health.deepHuntCursor) || 0;
+      const result = await huntTarget(ctx, targets[cursor % targets.length]);
+      onResult(result);
+      output.newDeals.push(...result.newDeals);
+      output.newGems.push(...result.newGems);
+      output.inspected += result.inspected;
+      output.titleMatches += result.titleMatches;
+      output.versionRejected += result.versionRejected;
+      output.reissueRejected += result.reissueRejected;
+      output.found += result.found;
+      output.target = result.target;
+      output.targetsChecked += 1;
+      // Persist per title so a mid-sweep failure or app exit resumes where it stopped instead of
+      // re-hunting the same head of the list on the next scan.
+      const health = state.get().health || {};
+      state.update({ health: { ...health, deepHuntCursor: (cursor + 1) % targets.length, lastDeepHuntAt } });
+      if (round + 1 < requested) publish();
+    }
+    return output;
   }
 
-  async function runBackfillBatch(ctx) {
+  async function runBackfillBatch(ctx, onResult = () => {}) {
     const targets = orderedTargets(ctx);
     let progress = backfillStatus();
     const validKeys = new Set(targets.map(targetIndexKey));
@@ -526,6 +557,7 @@ function createVintedService(options = {}) {
         break;
       }
       const result = await huntTarget(ctx, target);
+      onResult(result);
       output.newDeals.push(...result.newDeals);
       output.newGems.push(...result.newGems);
       output.inspected += result.inspected;
@@ -577,6 +609,13 @@ function createVintedService(options = {}) {
     lastError = null;
     publish();
     let delay = settings().pollSeconds * 1000;
+    // Keep completed searches' signals outside the try block: later failures must not
+    // discard notifications for deals that have already been persisted as seen.
+    const signals = { newDeals: [], newGems: [] };
+    const collectSignals = (result) => {
+      signals.newDeals.push(...result.newDeals);
+      signals.newGems.push(...result.newGems);
+    };
     try {
       const ctx = await loadContext(!!runOptions.refreshWantlist);
       const cfgAtStart = settings();
@@ -588,11 +627,14 @@ function createVintedService(options = {}) {
       const broad = backfillOnly
         ? { newDeals: [], newGems: [], inspected: 0, titleMatches: 0, versionRejected: 0, reissueRejected: 0, pages: 0, foundWatermark: true, feedItems: 0 }
         : await broadPoll(ctx);
+      collectSignals(broad);
       let deep = null;
-      if (backfillStatus().active) deep = await runBackfillBatch(ctx);
+      if (backfillStatus().active) deep = await runBackfillBatch(ctx, collectSignals);
       // If cancellation arrived while the broad request was in flight, stop at that cooperative
       // boundary. The normal sniper can resume its own Deep Hunt on the next scheduled cycle.
-      else if (!backfillAtStart && (runOptions.forceDeep || !lastDeepHuntAt || now() - lastDeepHuntAt >= settings().deepHuntSeconds * 1000)) deep = await deepHunt(ctx);
+      else if (!backfillAtStart && (runOptions.forceDeep || !lastDeepHuntAt || now() - lastDeepHuntAt >= settings().deepHuntSeconds * 1000)) {
+        deep = await deepHunt(ctx, runOptions.forceDeep ? MANUAL_DEEP_HUNT_TARGETS : 1, collectSignals);
+      }
       if (backfillStatus().active) delay = Math.min(delay, BACKFILL_ROUND_DELAY_MS);
       lastPollAt = now();
       lastRunStats = {
@@ -604,6 +646,7 @@ function createVintedService(options = {}) {
         reissueRejected: broad.reissueRejected,
         caughtUp: broad.foundWatermark,
         deepTarget: deep && deep.target || null,
+        deepTargetsChecked: deep && deep.targetsChecked || null,
         backfillChecked: deep && deep.checked || null,
         backfillTotal: deep && deep.total || null,
       };
@@ -611,10 +654,7 @@ function createVintedService(options = {}) {
       state.update({ health: { ...health, lastPollAt, lastDeepHuntAt, lastRunStats } });
       running = false;
       if (hasScheduledWork()) schedule(delay);
-      return publish({
-        newDeals: [...broad.newDeals, ...(deep ? deep.newDeals : [])],
-        newGems: [...broad.newGems, ...(deep ? deep.newGems : [])],
-      });
+      return publish(signals);
     } catch (error) {
       const deliberatelyStopped = !hasScheduledWork() && error && error.code === 'CLOSED';
       lastError = deliberatelyStopped ? null : (error && error.message ? error.message : String(error));
@@ -622,7 +662,7 @@ function createVintedService(options = {}) {
       delay = Math.max(delay, retryAfter);
       running = false;
       if (hasScheduledWork()) schedule(delay);
-      return publish();
+      return publish(signals);
     }
   }
 
@@ -724,7 +764,7 @@ function createVintedService(options = {}) {
   return { start, stop, runOnce, setEnabled, configure, startBackfill, cancelBackfill, snapshot, refreshWantlist: () => loadContext(true) };
 }
 
-module.exports = { createVintedService, clamp, asTimestamp, queryUrl, LIVE_DEAL_TTL_MS, BACKFILL_BATCH_SIZE, BACKFILL_ROUND_DELAY_MS };
+module.exports = { createVintedService, clamp, asTimestamp, queryUrl, LIVE_DEAL_TTL_MS, BACKFILL_BATCH_SIZE, BACKFILL_ROUND_DELAY_MS, MANUAL_DEEP_HUNT_TARGETS };
 
 if (require.main === module && process.argv.includes('--selftest')) {
   const assert = require('assert');
@@ -964,6 +1004,96 @@ if (require.main === module && process.argv.includes('--selftest')) {
     assert.strictEqual(cancelledResult.status.backfill.active, false);
     assert.strictEqual(cancelTargetedCalls, 0, 'cancelling during a broad poll does not start another targeted hunt');
     cancelService.stop();
+
+    // A manual scan must sweep a slice of the wantlist, not a single title: with one target per
+    // press the button was useless on a large wantlist and only the backfill produced results.
+    const sweepStateFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'deal-shark-vinted-sweep-')), 'state.json');
+    const sweepSize = MANUAL_DEEP_HUNT_TARGETS * 2 + 3;
+    const sweepWants = Array.from({ length: sweepSize }, (_unused, index) => ({
+      releaseId: 5000 + index, artist: `Sweep${index + 1}`, title: `Record${index + 1}`,
+    }));
+    const sweepMedians = Object.fromEntries(sweepWants.map((want) => [want.releaseId, { median: 100 }]));
+    let sweepTargetedCalls = 0;
+    const sweptQueries = [];
+    const sweepService = createVintedService({
+      stateFile: sweepStateFile,
+      now: () => clock,
+      setTimer: () => ({ fake: true }),
+      clearTimer: () => {},
+      readSettings: () => ({ vintedEnabled: false, vintedPollSeconds: 120, vintedDeepHuntSeconds: 60 }),
+      writeSettings: () => {},
+      readConfig: () => ({ username: 'test', token: 'secret', minDiscount: 0.5, shippingEstimate: 5 }),
+      loadWantlist: async () => sweepWants,
+      loadMedians: async () => sweepMedians,
+      loadReleaseMetadata: async (releaseId) => ({
+        id: releaseId,
+        formats: [{ name: 'Vinyl', descriptions: ['12\"'] }],
+        labels: [{ name: 'Sweep Records', catno: `CAT${String(releaseId).padStart(4, '0')}` }],
+      }),
+      clientFactory: () => ({
+        async catalog(input) {
+          if (input.searchText) { sweepTargetedCalls += 1; sweptQueries.push(String(input.searchText)); }
+          return { items: [], total: 0, fetchedAt: clock };
+        },
+        status() { return { state: 'ready', requestCount: sweepTargetedCalls, lastRequestAt: clock }; },
+        close() {},
+      }),
+    });
+    const expectedSweep = Math.min(MANUAL_DEEP_HUNT_TARGETS, sweepWants.length);
+    const sweepResult = await sweepService.runOnce({ forceDeep: true });
+    assert.strictEqual(sweepTargetedCalls, expectedSweep, 'a manual scan searches a whole slice of the wantlist, not one title');
+    assert.strictEqual(sweepResult.status.lastRunStats.deepTargetsChecked, expectedSweep);
+    assert.strictEqual(new Set(sweptQueries).size, expectedSweep, 'the sweep advances its cursor so no title is searched twice in one run');
+    clock += 61_000;
+    await sweepService.runOnce({ forceDeep: true });
+    assert.strictEqual(new Set(sweptQueries).size, Math.min(expectedSweep * 2, sweepWants.length), 'the next manual scan continues where the previous one stopped');
+    clock += 61_000;
+    const scheduledResult = await sweepService.runOnce({ scheduled: true });
+    assert.strictEqual(scheduledResult.status.lastRunStats.deepTargetsChecked, 1, 'a scheduled sniper cycle still hunts a single title so the newest feed stays fresh');
+    sweepService.stop();
+
+    // A later target failure must deliver earlier deals/gems exactly once, including
+    // backfill batches and broad-feed results followed by a failed deep hunt.
+    for (const mode of ['manual', 'backfill', 'broad']) {
+      let phase = 'warmup';
+      const alerts = [];
+      const partialService = createVintedService({
+        stateFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vinted-partial-')), 'state.json'),
+        now: () => clock,
+        setTimer: () => ({ fake: true }), clearTimer: () => {},
+        readSettings: () => ({ vintedEnabled: false }), writeSettings: () => {},
+        readConfig: () => ({ username: 'test', token: 'dummy', minDiscount: 0.5, shippingEstimate: 5 }),
+        loadWantlist: async () => [{ releaseId: 10, artist: 'Macho', title: 'Im a Man' }, { releaseId: 11, artist: 'Zebra', title: 'Other' }],
+        loadMedians: async () => ({ 10: { median: 100 }, 11: { median: 90 } }),
+        loadReleaseMetadata: async () => ({ id: 10, formats: [{ name: 'Vinyl', descriptions: ['12"'] }], labels: [{ name: 'Test Records', catno: 'TEST 001' }] }),
+        emit: (value) => alerts.push({ deals: (value.newDeals || []).length, gems: (value.newGems || []).length }),
+        clientFactory: () => ({
+          async catalog({ searchText }) {
+            if (phase === 'fail' && searchText && (mode === 'broad' || searchText.includes('Zebra'))) throw new Error('later target failed');
+            const hasItem = phase !== 'warmup' && (mode === 'broad' ? !searchText : searchText && searchText.includes('Macho'));
+            const items = hasItem ? [{ id: 55, title: 'Macho - Im a Man 12 inch vinyl', price: { amount: '20', currency_code: 'EUR' }, service_fee: { amount: '2' }, url: 'https://www.vinted.nl/items/55' }] : [];
+            return { items, total: items.length, fetchedAt: clock };
+          },
+          itemPage: async () => ({ found: true, description: 'Original pressing TEST 001' }),
+          status: () => ({ state: 'ready' }), close() {},
+        }),
+      });
+      await partialService.runOnce({ forceDeep: true });
+      phase = 'fail';
+      if (mode === 'backfill') partialService.startBackfill();
+      const partial = await partialService.runOnce({ forceDeep: true });
+      assert.strictEqual(partial.status.error, 'later target failed');
+      assert.strictEqual(partial.newDeals.length, 1, mode + ': retain completed deal alert');
+      assert.strictEqual(partial.newGems.length, 1, mode + ': retain completed rare-gem alert');
+      assert.strictEqual(partial.deals.length, 1);
+      phase = 'retry';
+      const retried = await partialService.runOnce({ forceDeep: true });
+      assert.strictEqual(retried.newDeals.length, 0, mode + ': retry must not duplicate deal alert');
+      assert.strictEqual(retried.newGems.length, 0, mode + ': retry must not duplicate gem alert');
+      assert.strictEqual(alerts.reduce((sum, item) => sum + item.deals, 0), 1);
+      assert.strictEqual(alerts.reduce((sum, item) => sum + item.gems, 0), 1);
+      partialService.stop();
+    }
     console.log('vinted/service selftest: all assertions passed');
   })().catch((error) => { console.error(error); process.exitCode = 1; });
 }

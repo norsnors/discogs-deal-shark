@@ -33,6 +33,9 @@ function normalize(input = {}) {
     version: VERSION,
     updatedAt: timestamp(value.updatedAt),
     cursor: Math.max(0, Number(value.cursor) || 0),
+    // A second cursor rotates only through the high-value head of the wantlist, so the small
+    // public-fallback request budget always covers the targets worth money before it runs out.
+    priorityCursor: Math.max(0, Number(value.priorityCursor) || 0),
     seenIds: [...new Set((Array.isArray(value.seenIds) ? value.seenIds : []).map(String))].slice(-50000),
     deals: cap(value.deals, 500),
     matches: cap(value.matches, 1000),

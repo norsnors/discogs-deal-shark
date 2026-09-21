@@ -1310,7 +1310,7 @@ function normalizeVintedSnapshot(value) {
       health: status.health || (status.enabled ? 'idle' : 'disabled'),
       lastPollAt: status.lastPollAt || null,
       nextPollAt: status.nextPollAt || null,
-      pollSeconds: Number(status.pollSeconds) || 15,
+      pollSeconds: Number(status.pollSeconds) || 120,
       targetCount: Number(status.targetCount) || 0,
       requestsLastHour: Number(status.requestsLastHour) || 0,
       message: status.message || null,
@@ -2210,7 +2210,7 @@ async function startScan(opts = {}) {
   if (scanAllRunning) return;
   if (activePlatform === 'vinted') {
     if (!hasApi || !window.api.vintedScanNow || vintedStatus.running) return;
-    vintedStatus = { ...vintedStatus, running: true, health: 'scanning', message: 'Checking newest Vinted listings and one Deep Hunt target…' };
+    vintedStatus = { ...vintedStatus, running: true, health: 'scanning', message: 'Checking newest Vinted listings and sweeping a batch of wantlist titles…' };
     renderVintedStatus();
     try { applyVintedSnapshot(await window.api.vintedScanNow(), { notify: true }); }
     catch (error) {

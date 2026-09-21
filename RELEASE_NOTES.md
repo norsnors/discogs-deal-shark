@@ -1,5 +1,24 @@
 # Unreleased
 
+- **Vinted scan restored after the September endpoint removal:** Vinted retired the anonymous
+  `/api/v2/catalog/items` JSON route. Deal Shark now reads the public server-rendered catalogue
+  payload instead, keeps the same challenge/rate-limit circuit breaker and requires no Vinted
+  account or token. Because these pages are much larger, background polling is bounded to at least
+  two minutes and manual scans process five targeted titles per press.
+- **A manual Vinted scan now sweeps the wantlist:** pressing Scan searched exactly one title per
+  press, which made the button useless on a large wantlist and left the existing-offer backfill as
+  the only mode that produced results. A manual scan now hunts five titles, persisting its cursor per
+  title so the next scan continues where it stopped. Scheduled sniper cycles still hunt one title,
+  because their job is to keep the newest feed fresh.
+- **Marktplaats spends its budget on the records worth money:** targets are ordered out-of-print
+  first, then by sold median, and each batch reserves part of itself for that high-value head while
+  the rest sweeps the tail. The two lanes cover disjoint ranges with their own cursors, so the
+  credential-free 500-request daily budget reaches the expensive titles every day without starving
+  the cheap ones.
+- **Stranded credentials after the app rename:** `dashboard/tools/migrate-legacy-credentials.js`
+  moves eBay, Tradera and Marktplaats credentials from a legacy user-data profile into the current
+  one. Profile secrets are encrypted with a per-profile key, so the tool decrypts and re-encrypts
+  rather than copying; marketplace preferences absent from the destination move across too.
 - **Optional marketplace views:** local pressing-aware scans for Vinted, official read-only eBay and
   Tradera adapters, and an experimental credential-free Marktplaats web fallback. These are not part
   of the v1.4.0 installers.
