@@ -51,11 +51,16 @@ jobs:
       # The Resend email path needs no npm packages. Gmail users: uncomment the next line.
       # - run: npm ci --omit=dev
 
+      # Restore and save are split (like the Tradera job) because actions/cache only saves when the
+      # whole job succeeds. A failed sweep (email outage, Discogs 5xx burst, timeout) would otherwise
+      # roll state back to the last green run: already-sent alerts would be sent again and alerts
+      # queued for retry would be lost. The store writes atomically, so a mid-sweep state is valid.
       - name: Restore state (history / cursor / alert memory)
-        uses: actions/cache@v6
+        id: state-cache
+        uses: actions/cache/restore@v6
         with:
           path: state
-          key: ddw-state-${{ github.run_id }}
+          key: ddw-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: ddw-state-
 
       - name: Run one sweep
@@ -86,9 +91,21 @@ jobs:
           MODE: balanced
           MIN_REFERENCE: '25'      # skip low-value records: VG+ suggestion must be >= EUR25 (kills noise, keeps diamonds)
           SHIPPING_ESTIMATE: '5'   # add EUR5 to the item price; the alert threshold uses the total
+        id: sweep
         run: node watch-once.js
 
+      # Runs before Publish so a failed push can never skip saving the alert memory.
+      - name: Save state after a sweep, also when it failed
+        if: ${{ always() && steps.state-cache.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          path: state
+          key: ${{ steps.state-cache.outputs.cache-primary-key }}
+
+      # watch-once.js writes these files after every completed sweep, so they are consistent even
+      # when a later sweep failed or the job timed out; the dashboard should still get them.
       - name: Publish deals.json + gems.json + state-seed.json for the dashboard / cache recovery
+        if: ${{ always() && contains(fromJSON('["success","failure","cancelled"]'), steps.sweep.outcome) }}
         run: |
           git config user.name "deal-watcher"
           git config user.email "deal-watcher@users.noreply.github.com"

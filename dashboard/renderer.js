@@ -2027,6 +2027,10 @@ async function refresh() {
   if (activePlatform === 'vinted') { await refreshVintedSnapshot(); return; }
   if (activePlatform === 'ebay') { await refreshEbaySnapshot(); return; }
   if (activePlatform === 'tradera') { await refreshTraderaSnapshot(); return; }
+  if (activePlatform === 'marktplaats') { await refreshMarktplaatsSnapshot(); return; }
+  // Everything below loads Discogs deals. A marketplace without its own branch above must never
+  // fall through, or its tab gets overwritten with Discogs cards on the next 30s poll.
+  if (activePlatform !== 'discogs') return;
   if (viewMode === 'scan') return; // don't clobber live scan results
   allNearMisses = []; // cloud deals.json carries no near-misses — they exist only in a local scan
   if (!hasApi) {

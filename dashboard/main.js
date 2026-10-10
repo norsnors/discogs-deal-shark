@@ -20,7 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { scanMinDiscount, parseMoney, evaluateScanPreliminary } = require('./scan-policy');
 const { filterRealMedians } = require('./git-policy');
-const { makeMedianPublisher } = require('./median-publisher');
+const { makeMedianPublisher, run: runCommand } = require('./median-publisher');
 const { dedupeGems, cloudBusyFromRun, estimateScanEta } = require('./runtime-policy');
 const { makeListingHistory } = require('./listing-history');
 const { normalizeScoutOptions, normalizeSearchResult, suggestionSnapshot, scoutScore, sortScoutResults } = require('./scout-policy');
@@ -61,6 +61,7 @@ if (!hasDashboardProfile(DEFAULT_USER_DATA_DIR)) {
 const WATCHER_DIR = app.isPackaged
   ? path.join(process.resourcesPath, 'watcher')
   : path.join(__dirname, '..');
+const git = (args, timeout) => runCommand('git', args, { cwd: WATCHER_DIR, timeout });
 
 // Where the USER's own data lives — config.json (Discogs creds), the state/ cache, sold-medians:
 //   • dev run  — the project folder (shared with the cloud watcher; the soldmedians git push works).

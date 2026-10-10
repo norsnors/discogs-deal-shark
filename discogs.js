@@ -13,7 +13,7 @@
  * A descriptive User-Agent is mandatory — Discogs 403s the default Node UA.
  *
  * Rate limit: 60 req/min authenticated, 25/min anonymous. The client reads the
- * X-Discogs-Ratelimit-* response headers and self-throttles, and backs off on 429.
+ * X-Discogs-Ratelimit-* response headers and self-throttles, and backs off on 429 and transient 5xx.
  */
 
 const API = 'https://api.discogs.com';
@@ -72,6 +72,15 @@ function makeClient(opts = {}) {
         continue;
       }
       if (res.status === 404) return { status: 404, data: null };
+      // Discogs/Cloudflare 5xx bursts (502/503/520) are transient. Without a retry a short outage
+      // fails enough releases to trip the sweep-health check and fail the whole Actions run.
+      // POST is the only non-idempotent method, so it is never replayed.
+      if (res.status >= 500 && attempt < 3 && method !== 'POST') {
+        await res.text().catch(() => '');
+        const retry = parseInt(res.headers.get('retry-after') || '', 10);
+        await sleep(Number.isFinite(retry) ? Math.min(retry, 60) * 1000 : 2000 * 2 ** attempt);
+        continue;
+      }
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         const err = new Error(`Discogs ${res.status} on ${pathname}: ${body.slice(0, 200)}`);
@@ -297,6 +306,21 @@ if (require.main === module && process.argv.includes('--selftest')) {
     const sharedB = makeClient({ token: 'SHARED-RATE-TEST', fetch: sharedFetch, minIntervalMs: 0 });
     await Promise.all([sharedA.getRelease(1), sharedB.getRelease(2)]);
     assert.strictEqual(maxActive, 1, 'separate clients sharing a token serialize against one Discogs rate budget');
+
+    // Transient 5xx is retried with backoff; a persistent one still surfaces as an error.
+    const reply = (status) => ({ ok: status < 400, status, headers: new Map(), json: async () => ({ id: 5, title: 'Recovered', artists: [] }), text: async () => 'upstream' });
+    let flaky = 0;
+    const flakyClient = makeClient({ token: 'FLAKY-TEST', fetch: async () => (++flaky < 3 ? reply(502) : reply(200)), sleep: async () => {}, minIntervalMs: 0 });
+    assert.strictEqual((await flakyClient.getRelease(5)).title, 'Recovered', 'two 502s followed by a 200 recover');
+    assert.strictEqual(flaky, 3, 'each 5xx is retried exactly once more');
+    let down = 0;
+    const downClient = makeClient({ token: 'DOWN-TEST', fetch: async () => { down++; return reply(503); }, sleep: async () => {}, minIntervalMs: 0 });
+    await assert.rejects(downClient.getRelease(5), (e) => e.status === 503, 'a persistent 503 still throws with its status');
+    assert.strictEqual(down, 4, 'a persistent 5xx gives up after 4 attempts');
+    let posts = 0;
+    const postClient = makeClient({ token: 'POST-TEST', fetch: async () => { posts++; return reply(500); }, sleep: async () => {}, minIntervalMs: 0 });
+    await assert.rejects(postClient.req('/x', { method: 'POST' }));
+    assert.strictEqual(posts, 1, 'a POST is never replayed on 5xx');
 
     // token present -> Authorization header set
     assert.ok(calls.every((x) => x.init.headers.Authorization === 'Discogs token=TESTTOKEN'), 'token header sent');

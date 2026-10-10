@@ -103,7 +103,7 @@ function makeMedianPublisher({ repoDir, accountProvider = defaultGitHubAccount }
   return { publish, verifyAccount };
 }
 
-module.exports = { makeMedianPublisher, defaultGitHubAccount };
+module.exports = { makeMedianPublisher, defaultGitHubAccount, run };
 
 if (require.main === module && process.argv.includes('--selftest')) {
   const assert = require('assert');
