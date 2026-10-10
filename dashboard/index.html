@@ -449,16 +449,6 @@
         <input type="text" id="ebay-postal-code" autocomplete="postal-code" spellcheck="false" placeholder="2011 AA" />
       </label>
       <p class="hint"><a href="#" id="ebay-keys-help">Open eBay Application Keys →</a><br /><a href="#" id="ebay-access-help">Read the production access requirements →</a></p>
-      <div class="provider-cloud-connect">
-        <h3>24/7 email</h3>
-        <p class="hint">Already using the Discogs cloud emails? Paste a GitHub token and press Connect.
-          That explicitly sends your locally saved App ID and Cert ID, encrypted with your watcher's
-          GitHub public key, so strict eBay matches can be emailed while this app is closed.</p>
-        <label>GitHub token <span class="opt">(used once, never stored)</span>
-          <input type="password" id="ebay-cloud-github" autocomplete="new-password" spellcheck="false" placeholder="paste token for your cloud watcher" />
-        </label>
-        <button id="ebay-cloud-connect" class="ghost" type="button">Connect eBay email</button>
-      </div>
       <div id="ebay-test-result" class="test-result"></div>
       <div class="modal-actions">
         <button id="ebay-test-btn" class="ghost">Save &amp; test</button>

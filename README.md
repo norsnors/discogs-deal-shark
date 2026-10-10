@@ -76,8 +76,8 @@ requests. Results and sold medians are cached locally so later scans can reuse r
 - Tracks exact-listing price drops and relists over time.
 - Explains why a result was selected instead of showing an unexplained score.
 - Can refresh in the background while the desktop app is open.
-- Supports optional 24/7 Discogs, eBay and Tradera email alerts through your own GitHub account.
-  Marketplace mail uses the official read-only APIs and only sends pressing-verified matches.
+- Supports optional 24/7 Discogs and Tradera email alerts through your own GitHub account.
+  Tradera mail uses the official read-only API and only sends pressing-verified matches.
 
 ## Privacy and safety
 

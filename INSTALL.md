@@ -124,12 +124,9 @@ when your cloud watcher last ran. Notes:
 
 - Emails start after the watcher has seen your wantlist a few times (it learns normal prices first,
   so you don't get flooded on day one).
-- If the official eBay API is already configured, the same action also stores its App ID and Cert
-  ID as encrypted GitHub Secrets. Existing cloud users can instead use **eBay API settings → Connect
-  eBay email**; the first eBay cloud scan learns existing listings without emailing them.
 - GitHub runs free scheduled tasks roughly every 1–1.5 hours (it delays the requested schedule) —
   that's the alert latency to expect.
-- It only ever **reads** Discogs and the official eBay Browse API and emails you; it never buys,
+- It only ever **reads** Discogs (and Tradera, when configured) and emails you; it never buys,
   bids, sends offers or messages. Everything runs on your own
   accounts; re-running the wizard is safe and just repairs/updates the setup.
 

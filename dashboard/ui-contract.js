@@ -64,7 +64,7 @@ assert.ok(/body\.platform-marktplaats #tab-scout, body\.platform-marktplaats #ta
 for (const channel of ['vinted:snapshot', 'vinted:setEnabled', 'vinted:configure', 'vinted:scanNow', 'vinted:startBackfill', 'vinted:cancelBackfill']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `Vinted IPC channel ${channel} is wired end-to-end`);
 }
-for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:test', 'ebay:snapshot', 'ebay:setEnabled', 'ebay:configure', 'ebay:scanNow', 'ebay:cloudSetup']) {
+for (const channel of ['ebay:credentialsStatus', 'ebay:saveCredentials', 'ebay:test', 'ebay:snapshot', 'ebay:setEnabled', 'ebay:configure', 'ebay:scanNow']) {
   assert.ok(preload.includes(channel) && main.includes(channel), `eBay IPC channel ${channel} is wired end-to-end`);
 }
 for (const channel of ['tradera:credentialsStatus', 'tradera:saveCredentials', 'tradera:test', 'tradera:snapshot', 'tradera:setEnabled', 'tradera:configure', 'tradera:scanNow', 'tradera:cloudSetup']) {

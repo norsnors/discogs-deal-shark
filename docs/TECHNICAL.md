@@ -255,12 +255,13 @@ failure in one adapter never cancels the other scans. The secondary header actio
 scans only the marketplace selected in the switcher.
 
 **Alert boundary:** Vinted and Marktplaats are local desktop integrations; their new strictly eligible
-deals trigger desktop notifications only while Deal Shark is open. eBay and Tradera additionally use
-independent short GitHub Actions jobs for 24/7 Resend email. Both cloud jobs have their own cached
-cursor, API budget and retrying email outbox. They email only pressing-verified deals and rare
-appearances; broader dashboard-only matches remain local and never enter the email channel. Adding
-Marktplaats cloud email would require its own encrypted credential flow, cursor, API budget and
-retrying outbox; none is implemented here.
+deals trigger desktop notifications only while Deal Shark is open. eBay works the same way: its
+cloud email job was removed, so eBay deals surface only in the desktop app. Tradera additionally
+uses an independent short GitHub Actions job for 24/7 Resend email, with its own cached cursor, API
+budget and retrying email outbox. It emails only pressing-verified deals and rare appearances;
+broader dashboard-only matches remain local and never enter the email channel. Adding cloud email
+for another marketplace would require its own encrypted credential flow, cursor, API budget and
+retrying outbox.
 
 Vinted has two alert tiers. **Shark deal** keeps the configured strict discount against the exact
 pressing's sold median. **Good Vinted price** maps Vinted `Heel goed` to a conservative VG+ pricing
@@ -360,10 +361,9 @@ the clearly labelled local estimate — with that pressing's real Discogs sold m
 Background watch rotates through a small wantlist batch at the chosen interval; **Scan eBay now**
 checks the whole wantlist. The adapter stops before 4,800 requests in a UTC day, leaving headroom below
 eBay's normal Browse allocation. It is read-only: the app opens the original eBay URL and never bids,
-buys, sends offers or messages. New strictly eligible deals use desktop notifications and, when
-`EBAY_CLIENT_ID` plus `EBAY_CERT_ID` are configured as GitHub Secrets, 24/7 cloud email. The first
-cloud run only warms the dedupe state and sends no historical listings. Sandbox credentials can
-test OAuth, but real production inventory requires eBay Buy API production approval.
+buys, sends offers or messages. New strictly eligible deals use desktop notifications only (there
+is no cloud eBay email). Sandbox credentials can test OAuth, but real production inventory requires
+eBay Buy API production approval.
 
 ### Tradera (official REST API v4)
 
@@ -550,9 +550,6 @@ Leave the secrets unset to keep it off (the default).
 | `MAIL_TO` / `MAIL_FROM` | where alerts go / sender (default `onboarding@resend.dev` — sandbox, verify a domain) |
 | `MAIL_REPLY_TO` | optional reply-to address (small deliverability nudge) |
 | `EMAIL_PROVIDER` | `resend` (default if key present) or `gmail` |
-| `EBAY_CLIENT_ID` / `EBAY_CERT_ID` | optional production eBay App ID + Cert ID for read-only 24/7 eBay email |
-| `EBAY_MARKETPLACE` / `EBAY_DELIVERY_COUNTRY` | eBay marketplace and delivery country (defaults `EBAY_NL` / `NL`) |
-| `EBAY_BATCH_SIZE` | wantlist targets per cloud eBay run (default 10, maximum 25) |
 | `TRADERA_APP_ID` / `TRADERA_APP_KEY` | optional Tradera app credentials for official read-only 24/7 Tradera email |
 | `TRADERA_BATCH_SIZE` | wantlist targets per cloud Tradera run (default 10, workflow uses 20, maximum 25) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | optional Telegram push next to email (see "Telegram push") |
